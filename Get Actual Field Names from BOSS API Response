@@ -1,0 +1,266 @@
+#Get Actual Field Names from BOSS API Response
+
+-- ========================================
+-- Get Actual Field Names from BOSS API Response
+-- Call API for each failed view and extract field names
+-- ========================================
+
+SET SERVEROUTPUT ON SIZE UNLIMITED
+
+CREATE OR REPLACE PROCEDURE get_boss_field_names(
+  p_config_name IN VARCHAR2
+) IS
+  
+  l_http_req          UTL_HTTP.REQ;
+  l_http_resp         UTL_HTTP.RESP;
+  l_response          CLOB;
+  l_buffer            VARCHAR2(32767);
+  l_oauth_token       VARCHAR2(4000);
+  l_job_request_id    NUMBER;
+  
+  -- Config details
+  l_oauth_token_url   VARCHAR2(500);
+  l_client_id         VARCHAR2(100);
+  l_client_secret     VARCHAR2(100);
+  l_scope             VARCHAR2(500);
+  l_api_base_url      VARCHAR2(500);
+  l_module_name       VARCHAR2(100);
+  l_view_name         VARCHAR2(100);
+  
+BEGIN
+  
+  DBMS_OUTPUT.PUT_LINE('========================================');
+  DBMS_OUTPUT.PUT_LINE('Getting field names for: ' || p_config_name);
+  DBMS_OUTPUT.PUT_LINE('========================================');
+  
+  -- Get config details
+  SELECT 
+    oauth_token_url,
+    client_id,
+    client_secret,
+    scope_boss,
+    api_base_url,
+    module_name,
+    view_name
+  INTO
+    l_oauth_token_url,
+    l_client_id,
+    l_client_secret,
+    l_scope,
+    l_api_base_url,
+    l_module_name,
+    l_view_name
+  FROM xx_int_saas_extract_config
+  WHERE config_name = p_config_name;
+  
+  DBMS_OUTPUT.PUT_LINE('View: ' || l_view_name);
+  DBMS_OUTPUT.PUT_LINE('Module: ' || l_module_name);
+  DBMS_OUTPUT.PUT_LINE('');
+  
+  -- Get OAuth Token
+  DBMS_OUTPUT.PUT_LINE('Step 1: Getting OAuth token...');
+  
+  l_http_req := UTL_HTTP.BEGIN_REQUEST(l_oauth_token_url, 'POST', 'HTTP/1.1');
+  UTL_HTTP.SET_HEADER(l_http_req, 'Content-Type', 'application/x-www-form-urlencoded');
+  
+  UTL_HTTP.WRITE_TEXT(l_http_req, 
+    'grant_type=client_credentials' ||
+    '&client_id=' || l_client_id ||
+    '&client_secret=' || l_client_secret ||
+    '&scope=' || l_scope
+  );
+  
+  l_http_resp := UTL_HTTP.GET_RESPONSE(l_http_req);
+  
+  l_response := NULL;
+  BEGIN
+    LOOP
+      UTL_HTTP.READ_TEXT(l_http_resp, l_buffer, 32767);
+      l_response := l_response || l_buffer;
+    END LOOP;
+  EXCEPTION
+    WHEN UTL_HTTP.END_OF_BODY THEN
+      UTL_HTTP.END_RESPONSE(l_http_resp);
+  END;
+  
+  -- Extract access token
+  l_oauth_token := REGEXP_SUBSTR(l_response, '"access_token":"([^"]+)"', 1, 1, NULL, 1);
+  
+  DBMS_OUTPUT.PUT_LINE('✓ Token obtained');
+  DBMS_OUTPUT.PUT_LINE('');
+  
+  -- Call BOSS API with simple collection-only query to get sample data
+  DBMS_OUTPUT.PUT_LINE('Step 2: Calling BOSS API for sample data...');
+  
+  DECLARE
+    l_submit_request CLOB;
+    l_job_id NUMBER;
+  BEGIN
+    
+    -- Build submit request
+    l_submit_request := '{' ||
+      '"jobDefinitionName":"AsyncDataExtraction",' ||
+      '"serviceName":"boss",' ||
+      '"requestParameters":{' ||
+        '"boss.module":"' || l_module_name || '",' ||
+        '"boss.resource.name":"' || l_view_name || '",' ||
+        '"boss.resource.version":"v1",' ||
+        '"boss.outputFormat":"json",' ||
+        '"boss.request.system.param.effectiveDate":"2025-02-15",' ||
+        '"boss.advancedQuery":"{\"collection\":{\"limit\":10}}"' ||  -- Just 10 records
+      '}}';
+    
+    -- Submit job
+    l_http_req := UTL_HTTP.BEGIN_REQUEST(
+      l_api_base_url || '/api/boss/scheduler/v1/jobs',
+      'POST',
+      'HTTP/1.1'
+    );
+    
+    UTL_HTTP.SET_HEADER(l_http_req, 'Authorization', 'Bearer ' || l_oauth_token);
+    UTL_HTTP.SET_HEADER(l_http_req, 'Content-Type', 'application/json');
+    
+    UTL_HTTP.WRITE_TEXT(l_http_req, l_submit_request);
+    
+    l_http_resp := UTL_HTTP.GET_RESPONSE(l_http_req);
+    
+    l_response := NULL;
+    BEGIN
+      LOOP
+        UTL_HTTP.READ_TEXT(l_http_resp, l_buffer, 32767);
+        l_response := l_response || l_buffer;
+      END LOOP;
+    EXCEPTION
+      WHEN UTL_HTTP.END_OF_BODY THEN
+        UTL_HTTP.END_RESPONSE(l_http_resp);
+    END;
+    
+    -- Extract job ID
+    l_job_request_id := JSON_VALUE(l_response, '$.jobRequestId');
+    
+    DBMS_OUTPUT.PUT_LINE('✓ Job submitted: ' || l_job_request_id);
+    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE('Manual steps to get field names:');
+    DBMS_OUTPUT.PUT_LINE('1. Wait 1-2 minutes for job to complete');
+    DBMS_OUTPUT.PUT_LINE('2. Download output file from job ' || l_job_request_id);
+    DBMS_OUTPUT.PUT_LINE('3. Look at first JSON record to see actual field names');
+    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE('Or check job status:');
+    DBMS_OUTPUT.PUT_LINE('GET ' || l_api_base_url || '/api/boss/scheduler/v1/jobs/' || l_job_request_id);
+    
+  END;
+  
+EXCEPTION
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('ERROR: ' || SQLERRM);
+END;
+/
+
+-- ========================================
+-- Call API for Each Failed View
+-- ========================================
+
+PROMPT ========================================
+PROMPT Calling API for each failed view
+PROMPT ========================================
+
+BEGIN
+  
+  DBMS_OUTPUT.PUT_LINE('Submitting simple extracts to get actual field names...');
+  DBMS_OUTPUT.PUT_LINE('');
+  
+  -- Process each failed config
+  FOR rec IN (
+    SELECT DISTINCT view_name, config_name
+    FROM xx_int_saas_extract_config
+    WHERE config_name IN (
+      'actionExtracts_v1',
+      'emailExtracts_v1',
+      'managerHierarchy_v20',
+      'nameExtracts_v1',
+      'workerEmails_DEV2',
+      'personAddressHistoryExtracts_v1',
+      'phoneExtracts_v1',
+      'workerEmails_DEV1',
+      'personAddressExtracts_v1'
+    )
+    ORDER BY view_name
+  ) LOOP
+    
+    get_boss_field_names(rec.config_name);
+    DBMS_OUTPUT.PUT_LINE('');
+    
+  END LOOP;
+  
+  DBMS_OUTPUT.PUT_LINE('========================================');
+  DBMS_OUTPUT.PUT_LINE('All jobs submitted');
+  DBMS_OUTPUT.PUT_LINE('Wait 2-3 minutes, then download outputs');
+  DBMS_OUTPUT.PUT_LINE('========================================');
+  
+END;
+/
+
+-- ========================================
+-- Alternative: Manual URL Construction
+-- ========================================
+
+PROMPT
+PROMPT ========================================
+PROMPT Manual Alternative: Build URLs for Browser Testing
+PROMPT ========================================
+
+SELECT 
+  config_name,
+  view_name,
+  module_name,
+  api_base_url || '/hcmRestApi/resources/' || module_name || '/' || view_name || '?limit=10' AS test_url
+FROM xx_int_saas_extract_config
+WHERE config_name IN (
+  'actionExtracts_v1',
+  'emailExtracts_v1',
+  'managerHierarchy_v20',
+  'nameExtracts_v1',
+  'workerEmails_DEV2',
+  'personAddressHistoryExtracts_v1',
+  'phoneExtracts_v1',
+  'workerEmails_DEV1',
+  'personAddressExtracts_v1'
+)
+ORDER BY view_name;
+
+PROMPT
+PROMPT Copy these URLs and call them with OAuth Bearer token
+PROMPT Look at the JSON response to see actual field names
+PROMPT
+
+-- ========================================
+-- Template for Recording Field Names
+-- ========================================
+
+PROMPT
+PROMPT ========================================
+PROMPT Record Field Names Here:
+PROMPT ========================================
+PROMPT
+PROMPT managerHierarchyExtracts:
+PROMPT   effectiveStartDate, effectiveEndDate, personId, assignmentId,
+PROMPT   managerType, managerLevel, managerId, managerAssignmentId,
+PROMPT   primaryAssignmentFlag, primaryManagerFlag, createdBy,
+PROMPT   timeCreated, updatedBy, timeUpdated
+PROMPT
+PROMPT emailExtracts: [FILL IN FROM API RESPONSE]
+PROMPT
+PROMPT phoneExtracts: [FILL IN FROM API RESPONSE]
+PROMPT
+PROMPT personAddressExtracts: [FILL IN FROM API RESPONSE]
+PROMPT
+PROMPT personAddressHistoryExtracts: [FILL IN FROM API RESPONSE]
+PROMPT
+PROMPT actionExtracts: [FILL IN FROM API RESPONSE]
+PROMPT
+PROMPT nameExtracts:
+PROMPT   [WE KNOW: lastName, firstName, displayName work]
+PROMPT
+PROMPT workerEmails: [FILL IN FROM API RESPONSE]
+PROMPT
+PROMPT ========================================
