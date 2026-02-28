@@ -1,0 +1,95 @@
+-- ========================================
+-- Clean Up Existing Scheduler Jobs
+-- ========================================
+
+SET SERVEROUTPUT ON SIZE UNLIMITED
+
+-- ========================================
+-- Step 1: Show Existing BOSS Jobs
+-- ========================================
+
+PROMPT ========================================
+PROMPT Step 1: Existing BOSS Scheduler Jobs
+PROMPT ========================================
+
+SELECT 
+  job_name,
+  state,
+  enabled,
+  run_count,
+  failure_count,
+  TO_CHAR(last_start_date, 'YYYY-MM-DD HH24:MI:SS') AS last_started
+FROM user_scheduler_jobs
+WHERE job_name LIKE 'BOSS_EXT_%'
+ORDER BY job_name;
+
+-- ========================================
+-- Step 2: Drop All BOSS Jobs
+-- ========================================
+
+PROMPT
+PROMPT ========================================
+PROMPT Step 2: Dropping All BOSS Scheduler Jobs
+PROMPT ========================================
+
+BEGIN
+  FOR rec IN (
+    SELECT job_name
+    FROM user_scheduler_jobs
+    WHERE job_name LIKE 'BOSS_EXT_%'
+  ) LOOP
+    
+    BEGIN
+      DBMS_SCHEDULER.DROP_JOB(
+        job_name => rec.job_name,
+        force => TRUE
+      );
+      
+      DBMS_OUTPUT.PUT_LINE('✓ Dropped: ' || rec.job_name);
+      
+    EXCEPTION
+      WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('✗ Error dropping ' || rec.job_name || ': ' || SQLERRM);
+    END;
+    
+  END LOOP;
+  
+  DBMS_OUTPUT.PUT_LINE('');
+  DBMS_OUTPUT.PUT_LINE('All BOSS scheduler jobs dropped');
+  
+END;
+/
+
+-- ========================================
+-- Step 3: Verify All Jobs Dropped
+-- ========================================
+
+PROMPT
+PROMPT ========================================
+PROMPT Step 3: Verification
+PROMPT ========================================
+
+SELECT 
+  COUNT(*) AS remaining_jobs
+FROM user_scheduler_jobs
+WHERE job_name LIKE 'BOSS_EXT_%';
+
+-- Should show 0
+
+PROMPT
+PROMPT ========================================
+PROMPT Cleanup Complete!
+PROMPT ========================================
+PROMPT
+PROMPT Now you can run parallel extracts:
+PROMPT
+PROMPT BEGIN
+PROMPT   xx_boss_parallel_runner_pkg.run_all_extracts_parallel(
+PROMPT     p_instance_code => 'DEV1',
+PROMPT     p_effective_date => NULL,
+PROMPT     p_multi_file => TRUE
+PROMPT   );
+PROMPT END;
+PROMPT /
+PROMPT
+PROMPT ========================================
