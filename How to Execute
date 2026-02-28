@@ -1,0 +1,7 @@
+BEGIN
+  xx_boss_parallel_runner_pkg.run_all_extracts_parallel(
+    p_instance_code => 'DEV1',
+    p_effective_date => NULL,
+    p_multi_file => TRUE
+  );
+END;
