@@ -5,3 +5,10 @@ BEGIN
     p_multi_file => TRUE
   );
 END;
+
+--Monitor the progress
+BEGIN
+  xx_boss_parallel_runner_pkg.monitor_job_status(
+    p_batch_id => 'BATCH_20250214_163000'  -- From step 3 output
+  );
+END;
