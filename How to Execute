@@ -12,3 +12,10 @@ BEGIN
     p_batch_id => 'BATCH_20250214_163000'  -- From step 3 output
   );
 END;
+SELECT 
+  job_name,
+  status,
+  TO_CHAR(log_date, 'HH24:MI:SS') AS completed_at
+FROM user_scheduler_job_run_details
+WHERE job_name LIKE 'BOSS_EXT_%'
+ORDER BY log_date DESC;    
