@@ -19,3 +19,10 @@ SELECT
 FROM user_scheduler_job_run_details
 WHERE job_name LIKE 'BOSS_EXT_%'
 ORDER BY log_date DESC;    
+SELECT 
+  job_name,
+  TO_CHAR(last_start_date, 'HH24:MI:SS') AS started,
+  ROUND((SYSDATE - last_start_date) * 24 * 60, 1) AS running_minutes
+FROM user_scheduler_jobs
+WHERE job_name LIKE 'BOSS_EXT_%'
+AND state = 'RUNNING';
