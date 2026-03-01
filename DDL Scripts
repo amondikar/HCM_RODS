@@ -1,2 +1,225 @@
 The following database objects need to be created to store configurations and data in ADW Or any other database
 
+The following database objects need to be created to store configurations and data in ADW Or any other database
+
+CREATE TABLE "XX_INT"."XX_INT_EXTRACT_JOB_LOG" 
+   (	"LOG_ID" NUMBER, 
+	"BATCH_ID" VARCHAR2(100) COLLATE "USING_NLS_COMP" NOT NULL ENABLE, 
+	"CONFIG_NAME" VARCHAR2(100) COLLATE "USING_NLS_COMP" NOT NULL ENABLE, 
+	"JOB_REQUEST_ID" NUMBER, 
+	"STATUS" VARCHAR2(50) COLLATE "USING_NLS_COMP", 
+	"SUBMISSION_TIME" DATE, 
+	"COMPLETION_TIME" DATE, 
+	"ERROR_MESSAGE" VARCHAR2(4000) COLLATE "USING_NLS_COMP", 
+	"CREATED_BY" VARCHAR2(100) COLLATE "USING_NLS_COMP", 
+	"CREATION_DATE" DATE, 
+	"LAST_UPDATED_BY" VARCHAR2(100) COLLATE "USING_NLS_COMP", 
+	"LAST_UPDATE_DATE" DATE, 
+	"TARGET_TABLE_NAME" VARCHAR2(100) COLLATE "USING_NLS_COMP", 
+	 PRIMARY KEY ("LOG_ID")
+  USING INDEX PCTFREE 10 INITRANS 20 MAXTRANS 255 COMPUTE STATISTICS 
+  STORAGE(INITIAL 65536 NEXT 1048576 MINEXTENTS 1 MAXEXTENTS 2147483645
+  PCTINCREASE 0 FREELISTS 1 FREELIST GROUPS 1
+  BUFFER_POOL DEFAULT FLASH_CACHE DEFAULT CELL_FLASH_CACHE DEFAULT)
+  TABLESPACE "DATA"  ENABLE
+   )  DEFAULT COLLATION "USING_NLS_COMP" SEGMENT CREATION IMMEDIATE 
+  PCTFREE 10 PCTUSED 40 INITRANS 10 MAXTRANS 255 
+ COLUMN STORE COMPRESS FOR QUERY HIGH ROW LEVEL LOCKING LOGGING
+  STORAGE(INITIAL 65536 NEXT 1048576 MINEXTENTS 1 MAXEXTENTS 2147483645
+  PCTINCREASE 0 FREELISTS 1 FREELIST GROUPS 1
+  BUFFER_POOL DEFAULT FLASH_CACHE DEFAULT CELL_FLASH_CACHE DEFAULT)
+  TABLESPACE "DATA" ;
+
+
+CREATE SEQUENCE error_log_seq
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+CREATE TABLE error_log (
+  -- Primary Key
+  log_id            NUMBER            NOT NULL,
+
+  -- When it happened
+  log_timestamp     TIMESTAMP         NOT NULL,
+
+  -- Session info (from V$SESSION)
+  username          VARCHAR2(100),
+  os_user           VARCHAR2(100),
+  machine           VARCHAR2(100),
+  program           VARCHAR2(100),
+  session_id        NUMBER,
+
+  -- Where error was caught (from UTL_CALL_STACK + $$PLSQL_LINE)
+  program_unit      VARCHAR2(500),
+  line_number       NUMBER,
+
+  -- Exception details
+  exception_name    VARCHAR2(200),
+  error_code        NUMBER,
+  error_message     VARCHAR2(4000),
+
+  -- Failed SQL: extracted from USER_SOURCE using backtrace line number
+  -- Shows 2 lines before + failing line + 2 lines after for full context
+  failed_sql        CLOB,
+
+  -- Full call stack at the point log_error was called
+  call_stack        CLOB,
+
+  -- Backtrace: traces back to the line that originally raised the error
+  error_backtrace   CLOB,
+
+  CONSTRAINT error_log_pk PRIMARY KEY (log_id)
+);
+
+-- Table and column comments
+COMMENT ON TABLE  error_log                  IS 'Central PL/SQL error log - all exceptions logged here';
+COMMENT ON COLUMN error_log.log_id           IS 'Primary key from error_log_seq';
+COMMENT ON COLUMN error_log.log_timestamp    IS 'Exact timestamp the error was logged (SYSTIMESTAMP)';
+COMMENT ON COLUMN error_log.username         IS 'Oracle DB username from V$SESSION';
+COMMENT ON COLUMN error_log.os_user          IS 'OS-level username from V$SESSION';
+COMMENT ON COLUMN error_log.machine          IS 'Client machine name from V$SESSION';
+COMMENT ON COLUMN error_log.program          IS 'Client program name from V$SESSION';
+COMMENT ON COLUMN error_log.session_id       IS 'Oracle Session SID from V$SESSION';
+COMMENT ON COLUMN error_log.program_unit     IS 'Package.Procedure/Function name where error was caught';
+COMMENT ON COLUMN error_log.line_number      IS 'Line number in handler where log_error was called ($$PLSQL_LINE)';
+COMMENT ON COLUMN error_log.exception_name   IS 'Human-readable exception name mapped from SQLCODE';
+COMMENT ON COLUMN error_log.error_code       IS 'Raw SQLCODE value';
+COMMENT ON COLUMN error_log.error_message    IS 'SQLERRM - full Oracle error message';
+COMMENT ON COLUMN error_log.failed_sql       IS 'Source lines around the failing statement (from USER_SOURCE via backtrace)';
+COMMENT ON COLUMN error_log.call_stack       IS 'Full PL/SQL call stack at the point log_error was invoked';
+COMMENT ON COLUMN error_log.error_backtrace  IS 'Backtrace to original line where exception was raised';
+-------------------------------------------------------
+
+
+- ========================================
+-- DDL for XX_INT_SAAS_EXTRACT_CONFIG
+-- Ready for PROD Migration
+-- ========================================
+
+-- Drop table if exists (optional - comment out for safety)
+-- DROP TABLE XX_INT_SAAS_EXTRACT_CONFIG PURGE;
+
+-- Create sequence for CONFIG_ID
+CREATE SEQUENCE ISEQ$$_2149728
+  START WITH 1
+  INCREMENT BY 1
+  NOCACHE
+  NOCYCLE;
+
+-- Create table
+CREATE TABLE XX_INT_SAAS_EXTRACT_CONFIG (
+  CONFIG_ID                 NUMBER          DEFAULT "XX_INT"."ISEQ$$_2149728".NEXTVAL NOT NULL,
+  CONFIG_NAME               VARCHAR2(100)   NOT NULL,
+  INSTANCE_CODE             VARCHAR2(50)    NOT NULL,
+  OAUTH_TOKEN_URL           VARCHAR2(4000)  NOT NULL,
+  CLIENT_ID                 VARCHAR2(500)   NOT NULL,
+  CLIENT_SECRET             VARCHAR2(500)   NOT NULL,
+  SCOPE_BOSS                VARCHAR2(500),
+  SCOPE_SAAS_BATCH          VARCHAR2(500),
+  API_BASE_URL              VARCHAR2(4000)  NOT NULL,
+  VIEW_NAME                 VARCHAR2(200),
+  MODULE_NAME               VARCHAR2(200),
+  RESOURCE_NAME             VARCHAR2(200),
+  RESOURCE_VERSION          VARCHAR2(50)    DEFAULT 'v1',
+  OUTPUT_FORMAT             VARCHAR2(20)    DEFAULT 'json',
+  TARGET_TABLE_NAME         VARCHAR2(128)   NOT NULL,
+  JSON_ARRAY_PATH           VARCHAR2(100)   DEFAULT 'items',
+  TRUNCATE_BEFORE_LOAD      VARCHAR2(1)     DEFAULT 'Y',
+  ADVANCED_QUERY_TEMPLATE   CLOB,
+  POLL_INTERVAL_SEC         NUMBER          DEFAULT 10,
+  POLL_TIMEOUT_SEC          NUMBER          DEFAULT 600,
+  ACTIVE_FLAG               VARCHAR2(1)     DEFAULT 'Y',
+  CREATED_BY                VARCHAR2(100),
+  CREATED_DATE              DATE            DEFAULT SYSDATE,
+  LAST_UPDATED_BY           VARCHAR2(100),
+  LAST_UPDATED_DATE         DATE,
+  LAST_RUN_DATE             DATE,
+  QUERY_LIMIT               NUMBER          DEFAULT 1000000,
+  QUERY_FILTER              VARCHAR2(4000),
+  QUERY_FIELDS              VARCHAR2(4000),
+  QUERY_ACCESSORS           CLOB,
+  AUTO_BUILD_QUERY          VARCHAR2(1)     DEFAULT 'Y',
+  QUERY_LAST_BUILT          DATE,
+  QUERY_BUILT_BY            VARCHAR2(100),
+  ADVANCE_QUERY_TOTAL       CLOB,
+  QUERY_FIELDS_JSON         CLOB,
+  QUERY_ACCESSORS_JSON      CLOB,
+  ENABLED                   VARCHAR2(1)     DEFAULT 'Y',
+  QUERY_FIELDS_JSON_BKP     CLOB,
+  QUERY_ACCESSORS_JSON_BKP  CLOB,
+  APEX_WORKSPACE            VARCHAR2(100),
+  APEX_APP_ID               NUMBER,
+  APEX_CRED_STATIC          VARCHAR2(100),
+  APEX_BATCH_USER           VARCHAR2(100)
+);
+
+-- Add primary key constraint
+ALTER TABLE XX_INT_SAAS_EXTRACT_CONFIG 
+  ADD CONSTRAINT XX_INT_SAAS_EXTRACT_CONFIG_PK PRIMARY KEY (CONFIG_ID);
+
+-- Add unique constraint on CONFIG_NAME + INSTANCE_CODE (if applicable)
+ALTER TABLE XX_INT_SAAS_EXTRACT_CONFIG 
+  ADD CONSTRAINT XX_INT_SAAS_EXTRACT_CONFIG_UK1 UNIQUE (CONFIG_NAME, INSTANCE_CODE);
+
+-- Create index on commonly queried columns
+CREATE INDEX XX_INT_SAAS_CONFIG_N1 ON XX_INT_SAAS_EXTRACT_CONFIG (INSTANCE_CODE, ACTIVE_FLAG);
+CREATE INDEX XX_INT_SAAS_CONFIG_N2 ON XX_INT_SAAS_EXTRACT_CONFIG (VIEW_NAME);
+CREATE INDEX XX_INT_SAAS_CONFIG_N3 ON XX_INT_SAAS_EXTRACT_CONFIG (CONFIG_NAME);
+
+-- Grant permissions (adjust as needed)
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON XX_INT_SAAS_EXTRACT_CONFIG TO your_app_user;
+
+-- Add comments
+COMMENT ON TABLE XX_INT_SAAS_EXTRACT_CONFIG IS 'Configuration table for BOSS API extracts';
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.CONFIG_ID IS 'Primary key - auto-generated';
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.CONFIG_NAME IS 'Unique configuration name';
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.INSTANCE_CODE IS 'Environment code (DEV1, PROD, etc)';
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.ADVANCED_QUERY_TEMPLATE IS 'Complete BOSS API advanced query JSON';
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.QUERY_FIELDS_JSON IS 'Fields array as JSON for rebuilding queries';
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.QUERY_ACCESSORS_JSON IS 'Accessors object as JSON for rebuilding queries';
+
+-- ========================================
+-- Notes for PROD Migration:
+-- ========================================
+
+/*
+IMPORTANT NOTES:
+
+1. SEQUENCE NAME:
+   - The sequence name "ISEQ$$_2149728" is system-generated in DEV
+   - In PROD, Oracle will generate a different number
+   - Option A: Keep the default sequence (Oracle auto-creates)
+   - Option B: Create a named sequence:
+   
+   CREATE SEQUENCE XX_INT_SAAS_CONFIG_SEQ START WITH 1000;
+   
+   Then change the default to:
+   DEFAULT XX_INT_SAAS_CONFIG_SEQ.NEXTVAL
+
+2. SCHEMA NAME:
+   - Change "XX_INT"."ISEQ$$_2149728" to your PROD schema name
+   - Or remove schema prefix if running as the owning schema
+
+3. INDEXES:
+   - Adjust index names/columns based on your query patterns
+   - The indexes shown are examples
+
+4. CONSTRAINTS:
+   - Verify the unique constraint matches your business rules
+   - Add foreign keys if needed
+
+5. GRANTS:
+   - Uncomment and adjust grant statements for your users
+
+6. DATA MIGRATION:
+   - After creating the table, export data from DEV:
+   
+   expdp schemas=XX_INT tables=XX_INT_SAAS_EXTRACT_CONFIG
+   
+   OR use SQL*Loader or INSERT INTO ... SELECT FROM dblink
+
+*/
+
+
