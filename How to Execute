@@ -26,3 +26,7 @@ SELECT
 FROM user_scheduler_jobs
 WHERE job_name LIKE 'BOSS_EXT_%'
 AND state = 'RUNNING';
+SELECT config_name, error_message
+FROM xx_int_extract_job_log
+WHERE batch_id = 'BATCH_20250212_143000'
+AND status = 'ERROR';
