@@ -5,7 +5,7 @@
 --  DDL for Package PKG_SPECTRA_WORKER_ETL_V4
 --------------------------------------------------------
 
-  CREATE OR REPLACE EDITIONABLE PACKAGE "XX_INT"."PKG_SPECTRA_WORKER_ETL_V4" AS
+  CREATE OR REPLACE EDITIONABLE PACKAGE  "PKG_SPECTRA_WORKER_ETL_V4" AS
 
   ----------------------------------------------------------------
   -- Package: PKG_SPECTRA_WORKER_ETL_V4
@@ -185,3 +185,4 @@
 END pkg_spectra_worker_etl_v4;
 
 /
+
