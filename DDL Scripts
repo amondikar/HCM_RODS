@@ -219,6 +219,19 @@ COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.QUERY_ACCESSORS_JSON IS 'Accessors 
   PCTINCREASE 0 FREELISTS 1 FREELIST GROUPS 1
   BUFFER_POOL DEFAULT FLASH_CACHE DEFAULT CELL_FLASH_CACHE DEFAULT)
   TABLESPACE "DATA" ;
+
+
+CREATE TABLE xx_int_saas_job_files (
+    run_id       NUMBER,
+    request_id   VARCHAR2(50),
+    file_name    VARCHAR2(400),
+    download_url VARCHAR2(4000),
+    mime_type    VARCHAR2(200),
+    file_blob    BLOB,
+    created_ts   TIMESTAMP(6),
+    
+    
+)
 /*
 IMPORTANT NOTES:
 
