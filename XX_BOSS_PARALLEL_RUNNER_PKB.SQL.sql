@@ -5,7 +5,7 @@
 --  DDL for Package Body XX_BOSS_PARALLEL_RUNNER_PKG
 --------------------------------------------------------
 
-  CREATE OR REPLACE EDITIONABLE PACKAGE BODY "XX_INT"."XX_BOSS_PARALLEL_RUNNER_PKG" AS
+  CREATE OR REPLACE EDITIONABLE PACKAGE BODY  "XX_BOSS_PARALLEL_RUNNER_PKG" AS
 
   -- ========================================
   -- Run All Extracts in Parallel
@@ -271,3 +271,4 @@ l_error_msg := SQLERRM;
 END xx_boss_parallel_runner_pkg;
 
 /
+
