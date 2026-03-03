@@ -5,7 +5,7 @@
 --  DDL for Package XX_BOSS_PARALLEL_RUNNER_PKG
 --------------------------------------------------------
 
-  CREATE OR REPLACE EDITIONABLE PACKAGE "XX_INT"."XX_BOSS_PARALLEL_RUNNER_PKG" AS
+  CREATE OR REPLACE EDITIONABLE PACKAGE  "XX_BOSS_PARALLEL_RUNNER_PKG" AS
   
   -- Main procedure to run all extracts in parallel
   PROCEDURE run_all_extracts_parallel(
@@ -22,3 +22,4 @@
 END xx_boss_parallel_runner_pkg;
 
 /
+
