@@ -5,7 +5,7 @@
 --  DDL for Package Body PKG_SPECTRA_WORKER_ETL_V4
 --------------------------------------------------------
 
-  CREATE OR REPLACE EDITIONABLE PACKAGE BODY "XX_INT"."PKG_SPECTRA_WORKER_ETL_V4" AS
+  CREATE OR REPLACE EDITIONABLE PACKAGE BODY  "PKG_SPECTRA_WORKER_ETL_V4" AS
 
   ----------------------------------------------------------------
   -- Global variables
@@ -1791,3 +1791,4 @@ END get_oauth_token_APEX2;
 END pkg_spectra_worker_etl_v4;
 
 /
+
