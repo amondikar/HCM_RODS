@@ -5,7 +5,7 @@
 --  DDL for Package Body XX_BOSS_QUERY_BUILDER_PKG
 --------------------------------------------------------
 
-  CREATE OR REPLACE EDITIONABLE PACKAGE BODY "XX_INT"."XX_BOSS_QUERY_BUILDER_PKG" AS
+  CREATE OR REPLACE EDITIONABLE PACKAGE BODY "XX_BOSS_QUERY_BUILDER_PKG" AS
 
   -- ========================================
   -- Parse Query to Columns
@@ -274,3 +274,4 @@ END;
 END xx_boss_query_builder_pkg;
 
 /
+
