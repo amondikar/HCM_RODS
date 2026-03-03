@@ -5,7 +5,7 @@
 --  DDL for Package XX_BOSS_QUERY_BUILDER_PKG
 --------------------------------------------------------
 
-  CREATE OR REPLACE EDITIONABLE PACKAGE "XX_INT"."XX_BOSS_QUERY_BUILDER_PKG" AS
+  CREATE OR REPLACE EDITIONABLE PACKAGE  "XX_BOSS_QUERY_BUILDER_PKG" AS
   
   FUNCTION build_advanced_query(p_config_name IN VARCHAR2) RETURN CLOB;
   PROCEDURE parse_query_to_columns(p_config_name IN VARCHAR2);
@@ -14,3 +14,4 @@
 END xx_boss_query_builder_pkg;
 
 /
+
