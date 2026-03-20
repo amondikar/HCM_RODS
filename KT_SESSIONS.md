@@ -121,6 +121,7 @@ Master configuration table. One row per extract definition.
 | QUERY_ACCESSORS | CLOB | JSON accessors definition |
 | AUTO_BUILD_QUERY | VARCHAR2(1) | `Y` = auto-build query from fields/accessors |
 | APEX_CRED_STATIC | VARCHAR2(100) | APEX credential store name (optional) |
+| MERGE_KEY_COLUMNS | VARCHAR2(500) | Comma-separated key columns for MERGE/upsert. `NULL` = TRUNCATE+INSERT mode |
 
 #### `XX_INT_EXTRACT_JOB_LOG`
 Tracks each extract job submitted within a batch run.
@@ -212,7 +213,7 @@ This is the heart of the framework. It handles the full extract lifecycle.
 | `unzip_and_load_worker_assignments(...)` | Unzips a single downloaded file and loads it. |
 | `unzip_and_load_multi_files(...)` | Unzips and loads **all** downloaded files for a request. |
 | `unzip_and_load_single_file(...)` | Loads a single file blob into a target table. |
-| `load_json_to_table(...)` | Parses JSON and inserts rows into the target table using `JSON_TABLE`. |
+| `load_json_to_table(...)` | Parses JSON and inserts **or merges** rows into the target table using `JSON_TABLE`. Supports upsert via `p_merge_key`. |
 | `log_etl(p_step, p_msg, p_clob)` | Autonomous-transaction logger. |
 
 #### `run_extract_by_config` – Parameter Reference
@@ -305,7 +306,65 @@ The `XX_INT_SAAS_EXTRACT_CONFIG` table drives everything. A single row defines:
 5. Create the target staging table (matching the expected JSON structure).
 6. Test with a single run before including in parallel batch.
 
-### 5.3 Enabling / Disabling an Extract
+### 5.3 MERGE / Upsert Mode
+
+By default, each extract run **truncates** the target table then inserts all rows. Setting `MERGE_KEY_COLUMNS` switches to **upsert** mode: existing rows are updated in place, new rows are inserted — no data is lost between runs.
+
+```sql
+-- Enable MERGE mode for a config (upsert on PERSON_NUMBER)
+UPDATE xx_int_saas_extract_config
+SET merge_key_columns = 'PERSON_NUMBER'
+WHERE config_name = 'WORKER_ASSIGNMENTS_DEV1';
+COMMIT;
+
+-- Multi-column key
+UPDATE xx_int_saas_extract_config
+SET merge_key_columns = 'PERSON_NUMBER,EFFECTIVE_DATE'
+WHERE config_name = 'WORKER_ASSIGNMENTS_DEV1';
+COMMIT;
+
+-- Revert to TRUNCATE+INSERT mode
+UPDATE xx_int_saas_extract_config
+SET merge_key_columns = NULL
+WHERE config_name = 'WORKER_ASSIGNMENTS_DEV1';
+COMMIT;
+```
+
+You can also call `load_json_to_table` directly with a merge key:
+
+```sql
+BEGIN
+  pkg_spectra_worker_etl_v4.load_json_to_table(
+    p_run_id          => 1,
+    p_request_id      => 'REQ123',
+    p_json            => :my_json_clob,
+    p_table_name      => 'STAGING_WORKERS',
+    p_json_array_path => 'items',
+    p_truncate        => FALSE,        -- ignored when p_merge_key is set
+    p_merge_key       => 'PERSON_NUMBER'
+  );
+END;
+/
+```
+
+**How the MERGE works internally:**
+
+```sql
+MERGE INTO staging_table t
+USING (
+  SELECT jt.*  -- JSON_TABLE data + RUN_ID, REQUEST_ID, CREATION_DATE, LAST_UPDATE_DATE
+  FROM JSON_TABLE(:json, '$.items[*]' COLUMNS (...)) jt
+) s
+ON (t.PERSON_NUMBER = s.PERSON_NUMBER)          -- key column(s)
+WHEN MATCHED THEN
+  UPDATE SET t.col1 = s.col1, ...,              -- all non-key columns
+             t.LAST_UPDATE_DATE = s.LAST_UPDATE_DATE
+WHEN NOT MATCHED THEN
+  INSERT (PERSON_NUMBER, col1, ..., CREATION_DATE, ...)
+  VALUES (s.PERSON_NUMBER, s.col1, ..., s.CREATION_DATE, ...)
+```
+
+### 5.4 Enabling / Disabling an Extract
 
 ```sql
 -- Disable a specific extract
@@ -321,7 +380,7 @@ WHERE config_name = 'WORKER_ASSIGNMENTS_DEV1';
 COMMIT;
 ```
 
-### 5.4 APEX Credential Store (Optional)
+### 5.5 APEX Credential Store (Optional)
 
 For environments using Oracle APEX, credentials can be stored in the APEX credential store instead of plaintext in the config table. Set the `APEX_CRED_STATIC`, `APEX_APP_ID`, and `APEX_WORKSPACE` columns, then use `get_oauth_token_apex()` variants.
 

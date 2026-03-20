@@ -686,11 +686,12 @@ BEGIN
   -- This procedure processes ALL downloaded files for a request
   ----------------------------------------------------------------
   PROCEDURE unzip_and_load_multi_files(
-    p_run_id IN NUMBER,
-    p_request_id IN VARCHAR2,
-    p_table_name IN VARCHAR2,
+    p_run_id          IN NUMBER,
+    p_request_id      IN VARCHAR2,
+    p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate_first IN BOOLEAN DEFAULT TRUE
+    p_truncate_first  IN BOOLEAN DEFAULT TRUE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL
   ) IS
     l_zip_blob BLOB;
     l_file_name VARCHAR2(200);
@@ -717,13 +718,14 @@ BEGIN
         -- Call the existing unzip procedure for each file
         -- Assuming the existing procedure handles a single zip file
         unzip_and_load_single_file(
-          p_run_id => p_run_id,
-          p_request_id => p_request_id,
-          p_file_name => rec.file_name,
-          p_file_blob => rec.file_blob,
-          p_table_name => p_table_name,
+          p_run_id          => p_run_id,
+          p_request_id      => p_request_id,
+          p_file_name       => rec.file_name,
+          p_file_blob       => rec.file_blob,
+          p_table_name      => p_table_name,
           p_json_array_path => p_json_array_path,
-          p_truncate => (l_files_processed = 1 AND p_truncate_first)  -- Only truncate for first file
+          p_truncate        => (l_files_processed = 1 AND p_truncate_first AND p_merge_key IS NULL),
+          p_merge_key       => p_merge_key
         );
 
         log_etl('UNZIP_COMPLETE_' || l_files_processed, 
@@ -760,13 +762,14 @@ BEGIN
   -- (This wraps the existing unzip_and_load_worker_assignments logic)
   ----------------------------------------------------------------
   PROCEDURE unzip_and_load_single_file(
-    p_run_id IN NUMBER,
-    p_request_id IN VARCHAR2,
-    p_file_name IN VARCHAR2,
-    p_file_blob IN BLOB,
-    p_table_name IN VARCHAR2,
+    p_run_id          IN NUMBER,
+    p_request_id      IN VARCHAR2,
+    p_file_name       IN VARCHAR2,
+    p_file_blob       IN BLOB,
+    p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate IN BOOLEAN DEFAULT FALSE
+    p_truncate        IN BOOLEAN DEFAULT FALSE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL
   ) IS
     -- Declare variables needed for unzipping
     l_files apex_zip.t_files;
@@ -822,12 +825,13 @@ BEGIN
 
       -- Load to table (using existing load procedure)
       load_json_to_table(
-        p_run_id => p_run_id,
-        p_request_id => p_request_id,
-        p_json => l_json_content,
-        p_table_name => p_table_name,
+        p_run_id          => p_run_id,
+        p_request_id      => p_request_id,
+        p_json            => l_json_content,
+        p_table_name      => p_table_name,
         p_json_array_path => p_json_array_path,
-        p_truncate => p_truncate
+        p_truncate        => p_truncate,
+        p_merge_key       => p_merge_key
       );
 
       log_etl('LOADED_FROM_ZIP', 'Loaded data from: ' || l_files(i));
@@ -909,12 +913,13 @@ BEGIN
       log_etl('JSON_LEN', TO_CHAR(DBMS_LOB.getlength(l_json_clob)));
 
       load_json_to_table(
-        p_run_id => p_run_id,
-        p_request_id => p_request_id,
-        p_json => l_json_clob,
-        p_table_name => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
+        p_run_id          => p_run_id,
+        p_request_id      => p_request_id,
+        p_json            => l_json_clob,
+        p_table_name      => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
         p_json_array_path => NVL(g_config_rec.json_array_path, 'items'),
-        p_truncate => (NVL(g_config_rec.truncate_before_load, 'Y') = 'Y' AND i = 1)
+        p_truncate        => (NVL(g_config_rec.truncate_before_load, 'Y') = 'Y' AND i = 1),
+        p_merge_key       => g_config_rec.merge_key_columns
       );
 
       log_etl('LOADED', 'Data loaded from: ' || l_src_file);
@@ -932,12 +937,13 @@ BEGIN
   -- Load JSON to Table (using original implementation with JSON_DATAGUIDE)
   ----------------------------------------------------------------
   PROCEDURE load_json_to_table(
-    p_run_id IN NUMBER,
-    p_request_id IN VARCHAR2,
-    p_json IN CLOB,
-    p_table_name IN VARCHAR2,
+    p_run_id          IN NUMBER,
+    p_request_id      IN VARCHAR2,
+    p_json            IN CLOB,
+    p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate IN BOOLEAN DEFAULT TRUE
+    p_truncate        IN BOOLEAN DEFAULT TRUE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL  -- Comma-separated key columns for MERGE (NULL = INSERT)
   ) IS
     l_dataguide CLOB;
     l_insert_sql CLOB;
@@ -1132,15 +1138,18 @@ BEGIN
       -- Ensure static columns exist even for existing table
       ensure_static_columns;
 
-      IF p_truncate THEN
+      IF p_truncate AND p_merge_key IS NULL THEN
         EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || p_table_name;
       END IF;
     END IF;
 
-    -- Insert data (include static columns + JSON columns)
+    -- Insert or merge data (static + JSON columns)
     DECLARE
-      l_col_list   CLOB := '';
+      l_col_list    CLOB := '';
       l_select_list CLOB := '';
+      l_on_clause   CLOB := '';
+      l_update_set  CLOB := '';
+      l_keys_upper  VARCHAR2(4000);
     BEGIN
       -- Column list
       l_col_list :=
@@ -1155,15 +1164,68 @@ BEGIN
         l_select_list := l_select_list || ', jt.' || l_columns(i).col_name;
       END LOOP;
 
-      l_insert_sql :=
-        'INSERT INTO ' || p_table_name || ' (' || l_col_list || ')' ||
-        ' SELECT ' || l_select_list ||
-        ' FROM JSON_TABLE(:1, ''$.' || p_json_array_path || '[*]'' COLUMNS (' ||
-        l_json_cols || ')) jt';
+      IF p_merge_key IS NOT NULL THEN
+        -- MERGE path: build ON clause + UPDATE SET from the key column list
+        l_keys_upper := ',' || UPPER(REPLACE(p_merge_key, ' ', '')) || ',';
+
+        -- ON clause: t.KEY1 = s.KEY1 AND t.KEY2 = s.KEY2 ...
+        DECLARE
+          l_rest  VARCHAR2(4000) := UPPER(REPLACE(p_merge_key, ' ', '')) || ',';
+          l_pos   PLS_INTEGER := 1;
+          l_comma PLS_INTEGER;
+          l_key   VARCHAR2(128);
+          l_first BOOLEAN := TRUE;
+        BEGIN
+          LOOP
+            l_comma := INSTR(l_rest, ',', l_pos);
+            EXIT WHEN l_comma = 0;
+            l_key := TRIM(SUBSTR(l_rest, l_pos, l_comma - l_pos));
+            IF l_key IS NOT NULL THEN
+              IF NOT l_first THEN l_on_clause := l_on_clause || ' AND '; END IF;
+              l_on_clause := l_on_clause || 't.' || l_key || ' = s.' || l_key;
+              l_first := FALSE;
+            END IF;
+            l_pos := l_comma + 1;
+          END LOOP;
+        END;
+
+        -- UPDATE SET: tracking cols + every non-key JSON column
+        l_update_set :=
+          't.RUN_ID = s.RUN_ID, t.REQUEST_ID = s.REQUEST_ID, t.LAST_UPDATE_DATE = s.LAST_UPDATE_DATE';
+        FOR i IN 1 .. l_columns.COUNT LOOP
+          IF INSTR(l_keys_upper, ',' || l_columns(i).col_name || ',') = 0 THEN
+            l_update_set := l_update_set ||
+              ', t.' || l_columns(i).col_name || ' = s.' || l_columns(i).col_name;
+          END IF;
+        END LOOP;
+
+        -- Assemble MERGE statement
+        l_insert_sql :=
+          'MERGE INTO ' || p_table_name || ' t' ||
+          ' USING (SELECT ' || l_select_list ||
+          ' FROM JSON_TABLE(:1, ''$.' || p_json_array_path || '[*]'' COLUMNS (' ||
+          l_json_cols || ')) jt) s' ||
+          ' ON (' || l_on_clause || ')' ||
+          ' WHEN MATCHED THEN UPDATE SET ' || l_update_set ||
+          ' WHEN NOT MATCHED THEN INSERT (' || l_col_list || ')' ||
+          ' VALUES (s.RUN_ID, s.REQUEST_ID, s.CREATION_DATE, s.LAST_UPDATE_DATE';
+        FOR i IN 1 .. l_columns.COUNT LOOP
+          l_insert_sql := l_insert_sql || ', s.' || l_columns(i).col_name;
+        END LOOP;
+        l_insert_sql := l_insert_sql || ')';
+
+      ELSE
+        -- INSERT path (original behaviour)
+        l_insert_sql :=
+          'INSERT INTO ' || p_table_name || ' (' || l_col_list || ')' ||
+          ' SELECT ' || l_select_list ||
+          ' FROM JSON_TABLE(:1, ''$.' || p_json_array_path || '[*]'' COLUMNS (' ||
+          l_json_cols || ')) jt';
+      END IF;
     END;
 
-    log_etl('INSERT_JSON_TO_TABLE', l_insert_sql);
-EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
+    log_etl('INSERT_OR_MERGE_JSON_TO_TABLE', l_insert_sql);
+    EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
     COMMIT;
   END load_json_to_table;
 
@@ -1276,8 +1338,9 @@ EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
 
       log_etl('MULTI_FILE_DOWNLOADED', 'Downloaded ' || l_files_downloaded || ' file(s)');
 
-      -- Truncate target table before loading (only once for all files)
-      IF g_config_rec.target_table_name IS NOT NULL THEN
+      -- Truncate target table before loading (only when not in merge mode)
+      IF g_config_rec.target_table_name IS NOT NULL
+         AND g_config_rec.merge_key_columns IS NULL THEN
         BEGIN
           EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || g_config_rec.target_table_name;
           log_etl('TABLE_TRUNCATED', 'Target table truncated: ' || g_config_rec.target_table_name);
@@ -1291,11 +1354,12 @@ EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
       log_etl('MULTI_FILE_LOAD', 'Starting multi-file load');
 
       unzip_and_load_multi_files(
-        p_run_id => g_run_id,
-        p_request_id => l_request_id,
-        p_table_name => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
+        p_run_id          => g_run_id,
+        p_request_id      => l_request_id,
+        p_table_name      => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
         p_json_array_path => NVL(g_config_rec.json_array_path, 'items'),
-        p_truncate_first => FALSE  -- Already truncated above
+        p_truncate_first  => FALSE,  -- Already truncated above (only when not merging)
+        p_merge_key       => g_config_rec.merge_key_columns
       );
 
       log_etl('MULTI_FILE_COMPLETE', 'All files processed successfully');

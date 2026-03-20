@@ -152,8 +152,14 @@ CREATE TABLE XX_INT_SAAS_EXTRACT_CONFIG (
   APEX_WORKSPACE            VARCHAR2(100),
   APEX_APP_ID               NUMBER,
   APEX_CRED_STATIC          VARCHAR2(100),
-  APEX_BATCH_USER           VARCHAR2(100)
+  APEX_BATCH_USER           VARCHAR2(100),
+  MERGE_KEY_COLUMNS         VARCHAR2(500)   -- Comma-separated column names used as MERGE key (NULL = INSERT/truncate mode)
 );
+
+-- For existing installations: add MERGE_KEY_COLUMNS to existing config table
+-- ALTER TABLE XX_INT_SAAS_EXTRACT_CONFIG ADD (MERGE_KEY_COLUMNS VARCHAR2(500));
+COMMENT ON COLUMN XX_INT_SAAS_EXTRACT_CONFIG.MERGE_KEY_COLUMNS IS
+  'Comma-separated column names used as the MERGE key. When set, MERGE (upsert) is used instead of TRUNCATE+INSERT. Example: ''PERSON_NUMBER,EFFECTIVE_DATE''';
 
 -- Add primary key constraint
 ALTER TABLE XX_INT_SAAS_EXTRACT_CONFIG 
