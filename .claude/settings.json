@@ -10,5 +10,18 @@
                 "repo": "Lum1104/Understand-Anything"
             }
         }
+    },
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "cd /home/user/HCM_RODS && python understand_onboard.py --onboard 2>/dev/null || true",
+                        "statusMessage": "Generating HCM_RODS onboarding guide..."
+                    }
+                ]
+            }
+        ]
     }
 }
