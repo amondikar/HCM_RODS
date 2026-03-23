@@ -174,40 +174,25 @@ v_backtrace  VARCHAR2(4000);
     END IF;
 
     l_query := l_query || '}';
-l_json_test := REPLACE(l_query, '''{{EFFECTIVE_DATE}}''', '''2024-01-01''');
- BEGIN
-    l_json_obj := JSON_OBJECT_T.PARSE(l_json_test);
-    l_is_valid := 1;
-     v_backtrace := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
-
-      log_error(
-        p_program_unit => UTL_CALL_STACK.CONCATENATE_SUBPROGRAM(
-                            UTL_CALL_STACK.SUBPROGRAM(1)),
-        p_line_number  => $$PLSQL_LINE,
-        p_sqlcode      => SQLCODE,
-        p_sqlerrm      => SQLERRM,
-        p_backtrace    => v_backtrace
-      );
-  DBMS_OUTPUT.PUT_LINE('=== VALID ==='||p_config_name);
-EXCEPTION
-    WHEN OTHERS THEN
+    l_json_test := REPLACE(l_query, '''{{EFFECTIVE_DATE}}''', '''2024-01-01''');
+    BEGIN
+      l_json_obj := JSON_OBJECT_T.PARSE(l_json_test);
+      l_is_valid := 1;
+      DBMS_OUTPUT.PUT_LINE('=== VALID ==='||p_config_name);
+    EXCEPTION
+      WHEN OTHERS THEN
         l_is_valid := 0;
-        
-      v_backtrace := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
-
-      log_error(
-        p_program_unit => UTL_CALL_STACK.CONCATENATE_SUBPROGRAM(
-                            UTL_CALL_STACK.SUBPROGRAM(1)),
-        p_line_number  => $$PLSQL_LINE,
-        p_sqlcode      => SQLCODE,
-        p_sqlerrm      => SQLERRM,
-        p_backtrace    => v_backtrace
-      );
-   
+        v_backtrace := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
+        log_error(
+          p_program_unit => UTL_CALL_STACK.CONCATENATE_SUBPROGRAM(
+                              UTL_CALL_STACK.SUBPROGRAM(1)),
+          p_line_number  => $$PLSQL_LINE,
+          p_sqlcode      => SQLCODE,
+          p_sqlerrm      => SQLERRM,
+          p_backtrace    => v_backtrace
+        );
         DBMS_OUTPUT.PUT_LINE('=== INVALID ==='||p_config_name);
-     --   DBMS_OUTPUT.PUT_LINE('SQLCODE  : ' || SQLCODE);
-     --   DBMS_OUTPUT.PUT_LINE('SQLERRM  : ' || SQLERRM);
-END;
+    END;
 
     -- Update table
     UPDATE xx_int_saas_extract_config
@@ -215,16 +200,6 @@ END;
         query_last_built = SYSDATE,
         query_built_by = USER
     WHERE config_name = p_config_name;
-    v_backtrace := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
-
-      log_error(
-        p_program_unit => UTL_CALL_STACK.CONCATENATE_SUBPROGRAM(
-                            UTL_CALL_STACK.SUBPROGRAM(1)),
-        p_line_number  => $$PLSQL_LINE,
-        p_sqlcode      => SQLCODE,
-        p_sqlerrm      => SQLERRM,
-        p_backtrace    => v_backtrace
-      );
     COMMIT;
 
     RETURN l_query;

@@ -126,7 +126,14 @@
     INTO l_token
     FROM JSON_TABLE(l_json, '$' COLUMNS (access_token VARCHAR2(4000) PATH '$.access_token')) jt;
 
+    DBMS_LOB.freetemporary(l_json);
     RETURN 'Bearer ' || l_token;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF DBMS_LOB.istemporary(l_json) = 1 THEN
+        DBMS_LOB.freetemporary(l_json);
+      END IF;
+      RAISE;
   END get_oauth_token;
 
   ----------------------------------------------------------------
@@ -238,6 +245,10 @@
     LOOP
       log_etl('POLL_STATUS_BEGIN', 'requestId=' || p_request_id);
 
+      -- Free previous iteration's LOB before creating a new one
+      IF DBMS_LOB.istemporary(l_json) = 1 THEN
+        DBMS_LOB.freetemporary(l_json);
+      END IF;
       DBMS_LOB.createtemporary(l_json, TRUE);
 
       l_req := UTL_HTTP.begin_request(l_url, 'GET', 'HTTP/1.1');
@@ -288,10 +299,6 @@
 
       IF l_elapsed > p_timeout THEN
         RAISE_APPLICATION_ERROR(-20002, 'Poll timeout waiting for extract completion');
-      END IF;
-
-      IF DBMS_LOB.istemporary(l_json) = 1 THEN
-        DBMS_LOB.freetemporary(l_json);
       END IF;
     END LOOP;
   END poll_extract_status;
@@ -449,12 +456,11 @@ BEGIN
     l_http_code varchar2(100);
     l_buffer VARCHAR2(32767);
     l_json CLOB;
-      c_extract_file_base_url CONSTANT VARCHAR2(4000) :=
-        'https://fa-espx-dev1-saasfaprod1.fa.ocs.oraclecloud.com/api/saas-batch/jobfilemanager/v1/jobRequests/{{jobRequestId}}/outputFiles';
 
   BEGIN
-    l_url := REPLACE(c_extract_file_base_url, 
-                     '{{jobRequestId}}', p_file_id);
+    -- Use api_base_url from config to support all instances (DEV/STAGE/PROD)
+    l_url := g_config_rec.api_base_url ||
+             '/api/saas-batch/jobfilemanager/v1/jobRequests/' || p_file_id || '/outputFiles';
 
     log_etl('HTTP_PRE', 'Calling URL=' || l_url);
 
@@ -480,11 +486,11 @@ BEGIN
       WHEN UTL_HTTP.END_OF_BODY THEN
         NULL;
     END;
-        l_http_code := l_resp.status_code;
-    log_etl('got l_http_code', l_http_code);
-
-    log_etl('got download file name response', DBMS_LOB.SUBSTR(l_json, 3900, 1));
+    -- Read status_code BEFORE end_response (handle becomes invalid after)
+    l_http_code := l_resp.status_code;
     UTL_HTTP.end_response(l_resp);
+    log_etl('got l_http_code', l_http_code);
+    log_etl('got download file name response', DBMS_LOB.SUBSTR(l_json, 3900, 1));
 
     RETURN l_json;
   END download_extract_output;
@@ -1225,7 +1231,8 @@ BEGIN
     END;
 
     log_etl('INSERT_OR_MERGE_JSON_TO_TABLE', l_insert_sql);
-    EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
+    -- Bind order matches placeholders: :1=JSON (JSON_TABLE source), :2=RUN_ID, :3=REQUEST_ID
+    EXECUTE IMMEDIATE l_insert_sql USING p_json, p_run_id, p_request_id;
     COMMIT;
   END load_json_to_table;
 
@@ -1487,7 +1494,7 @@ BEGIN
     -- p_token_url, p_client_id, p_client_secret, p_scope
     -- now sourced from APEX credential — config table values ignored
     l_idcs_resp := APEX_WEB_SERVICE.MAKE_REST_REQUEST(
-                       p_url                  => c_post_body,
+                       p_url                  => p_token_url,
                        p_http_method          => 'POST',
                        p_body                 => c_post_body,
                        p_credential_static_id => c_cred_id
