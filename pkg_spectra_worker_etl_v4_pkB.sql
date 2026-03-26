@@ -12,6 +12,7 @@
   ----------------------------------------------------------------
   g_run_id      NUMBER;
   g_request_id  VARCHAR2(200);   -- HCM job request ID, set as soon as known
+  g_view_name   VARCHAR2(200);   -- BOSS business view name (boss.view.name), from config
   g_oauth_token VARCHAR2(4000);
   g_config_rec  xx_int_saas_extract_config%ROWTYPE;
 
@@ -148,7 +149,8 @@
     p_version         IN VARCHAR2,
     p_format          IN VARCHAR2,
     p_advanced_query  IN CLOB,
-    p_effective_date  IN VARCHAR2
+    p_effective_date  IN VARCHAR2,
+    p_view_name       IN VARCHAR2 DEFAULT NULL  -- boss.view.name, omitted when NULL
   ) RETURN VARCHAR2 IS
     l_req       UTL_HTTP.req;
     l_resp      UTL_HTTP.resp;
@@ -165,7 +167,7 @@
     -- Replace {{EFFECTIVE_DATE}} placeholder in advanced query
     l_adv_query_final := REPLACE(p_advanced_query, '{{EFFECTIVE_DATE}}', NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')));
 
-    -- Build payload
+    -- Build payload; boss.view.name is included only when p_view_name is not NULL
     SELECT JSON_OBJECT(
              'jobDefinitionName' VALUE 'AsyncDataExtraction',
              'serviceName' VALUE 'boss',
@@ -175,6 +177,7 @@
                'boss.resource.version' VALUE p_version,
                'boss.outputFormat' VALUE p_format,
                'boss.request.system.param.effectiveDate' VALUE NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')),
+               'boss.view.name' VALUE p_view_name ABSENT ON NULL,
                'boss.advancedQuery' VALUE ('' || l_adv_query_final)
              )
              RETURNING CLOB
@@ -354,13 +357,14 @@
 
     -- Submit extract job
     l_request_id := submit_extract_job(
-      p_api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
-      p_module_name,
-      p_resource_name,
-      'v1',  -- default version
-      'json', -- default format
-      p_advanced_query,
-      l_effective_date
+      p_job_request_url => p_api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
+      p_module_name     => p_module_name,
+      p_resource_name   => p_resource_name,
+      p_version         => 'v1',
+      p_format          => 'json',
+      p_advanced_query  => p_advanced_query,
+      p_effective_date  => l_effective_date,
+      p_view_name       => g_view_name
     );
     g_request_id := l_request_id;  -- expose to log_etl for all subsequent rows
 
@@ -1271,6 +1275,8 @@ BEGIN
     FROM xx_int_saas_extract_config
     WHERE config_name = p_config_name AND active_flag = 'Y';
 
+    g_view_name := g_config_rec.view_name;  -- NULL when not configured = no view filter
+
     -- Start log
     INSERT INTO spectra_worker_etl_log (status, message)
     VALUES ('STARTED', 'ETL run initiated for config: ' || p_config_name)
@@ -1279,6 +1285,7 @@ BEGIN
     g_request_id := NULL;  -- reset so stale value from previous run is never logged
 
     log_etl('CONFIG', 'Using configuration: ' || p_config_name);
+    log_etl('VIEW_NAME', CASE WHEN g_view_name IS NOT NULL THEN 'boss.view.name = ' || g_view_name ELSE 'No view filter (boss.view.name omitted)' END);
     log_etl('MULTI_FILE_MODE', 'Multi-file processing: ' || CASE WHEN p_multi_file THEN 'ENABLED' ELSE 'DISABLED' END);
 
     -- Get OAuth token
@@ -1293,13 +1300,14 @@ BEGIN
 
     -- Submit extract job
     l_request_id := submit_extract_job(
-      g_config_rec.api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
-      g_config_rec.module_name,
-      g_config_rec.resource_name,
-      g_config_rec.resource_version,
-      g_config_rec.output_format,
-      g_config_rec.advanced_query_template,
-      NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD'))
+      p_job_request_url => g_config_rec.api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
+      p_module_name     => g_config_rec.module_name,
+      p_resource_name   => g_config_rec.resource_name,
+      p_version         => g_config_rec.resource_version,
+      p_format          => g_config_rec.output_format,
+      p_advanced_query  => g_config_rec.advanced_query_template,
+      p_effective_date  => NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')),
+      p_view_name       => g_view_name  -- NULL when not configured, omitted from payload
     );
     g_request_id := l_request_id;  -- expose to log_etl for all subsequent rows
 
