@@ -10,9 +10,10 @@
   ----------------------------------------------------------------
   -- Global variables
   ----------------------------------------------------------------
-  g_run_id NUMBER;
+  g_run_id      NUMBER;
+  g_request_id  VARCHAR2(200);   -- HCM job request ID, set as soon as known
   g_oauth_token VARCHAR2(4000);
-  g_config_rec xx_int_saas_extract_config%ROWTYPE;
+  g_config_rec  xx_int_saas_extract_config%ROWTYPE;
 
   ----------------------------------------------------------------
   -- Logging
@@ -35,8 +36,9 @@
       l_text := l_text || ' | CLOB=' || DBMS_LOB.SUBSTR(p_clob, 500, 1);
     END IF;
 
-    INSERT INTO spectra_worker_etl_log (status, message)
-    VALUES ('log', l_text);
+    -- Stamp run_id and request_id so every detail row is filterable
+    INSERT INTO spectra_worker_etl_log (run_id, request_id, status, message)
+    VALUES (g_run_id, g_request_id, 'log', l_text);
 
     COMMIT;
   EXCEPTION
@@ -333,7 +335,8 @@
     INSERT INTO spectra_worker_etl_log (status, message)
     VALUES ('STARTED', 'ETL run initiated (direct parameters)')
     RETURNING run_id INTO l_run_id;
-    g_run_id := l_run_id;
+    g_run_id     := l_run_id;
+    g_request_id := NULL;  -- reset so stale value from previous run is never logged
 
     log_etl('START', 'Direct execution started');
 
@@ -359,6 +362,7 @@
       p_advanced_query,
       l_effective_date
     );
+    g_request_id := l_request_id;  -- expose to log_etl for all subsequent rows
 
     log_etl('SUBMIT', 'Job submitted: ' || l_request_id);
 
@@ -1271,7 +1275,8 @@ BEGIN
     INSERT INTO spectra_worker_etl_log (status, message)
     VALUES ('STARTED', 'ETL run initiated for config: ' || p_config_name)
     RETURNING run_id INTO l_run_id;
-    g_run_id := l_run_id;
+    g_run_id     := l_run_id;
+    g_request_id := NULL;  -- reset so stale value from previous run is never logged
 
     log_etl('CONFIG', 'Using configuration: ' || p_config_name);
     log_etl('MULTI_FILE_MODE', 'Multi-file processing: ' || CASE WHEN p_multi_file THEN 'ENABLED' ELSE 'DISABLED' END);
@@ -1296,6 +1301,7 @@ BEGIN
       g_config_rec.advanced_query_template,
       NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD'))
     );
+    g_request_id := l_request_id;  -- expose to log_etl for all subsequent rows
 
     log_etl('SUBMIT', 'Job submitted: ' || l_request_id);
 
