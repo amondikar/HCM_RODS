@@ -200,6 +200,44 @@ GRANT RESOURCE TO XX_RODS;
 --CREATE OR REPLACE SYNONYM XX_RODS.XX_INT_SAAS_EXTRACT_CONFIG FOR XX_INT.XX_INT_SAAS_EXTRACT_CONFIG;
 --CREATE OR REPLACE SYNONYM XX_RODS.XX_INT_EXTRACT_JOB_LOG FOR XX_INT.XX_INT_EXTRACT_JOB_LOG;
 --CREATE OR REPLACE SYNONYM XX_RODS.PKG_SPECTRA_WORKER_ETL_V4 FOR XX_INT.PKG_SPECTRA_WORKER_ETL_V4;
+--
+
+--APEX Grants needed added on 3/20 during first testing 
+-- 1. CREATE SESSION WRAPPER
+CREATE OR REPLACE PROCEDURE create_apex_session(
+    p_app_id   IN NUMBER,
+    p_page_id  IN NUMBER DEFAULT 1,
+    p_username IN VARCHAR2
+) AS
+BEGIN
+    APEX_UTIL.SET_WORKSPACE(p_workspace => 'XX_INT');
+    APEX_UTIL.SET_SECURITY_GROUP_ID(
+        p_security_group_id => APEX_UTIL.FIND_SECURITY_GROUP_ID('XX_INT')
+    );
+    APEX_SESSION.CREATE_SESSION(
+        p_app_id   => p_app_id,
+        p_page_id  => p_page_id,
+        p_username => p_username
+    );
+END create_apex_session;
+/
+
+-- 2. DELETE SESSION WRAPPER
+CREATE OR REPLACE PROCEDURE delete_apex_session(
+    p_session_id IN NUMBER
+) AS
+BEGIN
+    IF p_session_id IS NOT NULL THEN
+        APEX_SESSION.DELETE_SESSION(
+            p_session_id => p_session_id
+        );
+    END IF;
+END delete_apex_session;
+/
+
+-- 3. GRANTS TO XX_RODS
+GRANT EXECUTE ON create_apex_session TO XX_RODS;
+GRANT EXECUTE ON delete_apex_session TO XX_RODS;
 
 -- ========================================
 -- 10. VERIFY GRANTS

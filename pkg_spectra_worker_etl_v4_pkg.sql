@@ -28,7 +28,8 @@
     p_target_table       IN VARCHAR2,
     p_advanced_query     IN CLOB,
     p_json_array_path    IN VARCHAR2 DEFAULT 'items',
-    p_truncate           IN BOOLEAN DEFAULT TRUE
+    p_truncate           IN BOOLEAN DEFAULT TRUE,
+    p_view_name          IN VARCHAR2
   );
 
   ----------------------------------------------------------------
@@ -79,7 +80,8 @@
     p_version         IN VARCHAR2,
     p_format          IN VARCHAR2,
     p_advanced_query  IN CLOB,
-    p_effective_date  IN VARCHAR2
+    p_effective_date  IN VARCHAR2,
+     p_view_name       in varchar2
   ) RETURN VARCHAR2;
 
   ----------------------------------------------------------------
@@ -144,7 +146,8 @@
     p_request_id      IN VARCHAR2,
     p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate_first  IN BOOLEAN DEFAULT TRUE
+    p_truncate_first  IN BOOLEAN DEFAULT TRUE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL  -- Comma-separated key columns for MERGE (NULL = INSERT)
   );
 
   ----------------------------------------------------------------
@@ -158,7 +161,8 @@
     p_file_blob       IN BLOB,
     p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate        IN BOOLEAN DEFAULT FALSE
+    p_truncate        IN BOOLEAN DEFAULT FALSE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL  -- Comma-separated key columns for MERGE (NULL = INSERT)
   );
 
   ----------------------------------------------------------------
@@ -170,7 +174,8 @@
     p_json            IN CLOB,
     p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate        IN BOOLEAN DEFAULT TRUE
+    p_truncate        IN BOOLEAN DEFAULT TRUE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL  -- Comma-separated key columns for MERGE (NULL = INSERT)
   );
 
   ----------------------------------------------------------------

@@ -54,33 +54,22 @@
     DBMS_OUTPUT.PUT_LINE('Effective Date: ' || l_effective_date);
     DBMS_OUTPUT.PUT_LINE('Multi-file: ' || l_multi_file_str);
     DBMS_OUTPUT.PUT_LINE('========================================');
-  DBMS_OUTPUT.PUT_LINE('========================================');
     DBMS_OUTPUT.PUT_LINE('Building queries for all configs...');
-    DBMS_OUTPUT.PUT_LINE('Target Table to be refreshed ...'  );
+    DBMS_OUTPUT.PUT_LINE('Target Table to be refreshed ...');
     DBMS_OUTPUT.PUT_LINE('========================================');
-    
-    -- Build all queries first
+
+    -- Build all queries first (before submitting jobs)
     FOR rec IN c_configs LOOP
       BEGIN
-      l_query := xx_boss_query_builder_pkg.build_advanced_query(rec.config_name);
-      l_target_tbl_name := rec.target_table_name ;
-     DBMS_OUTPUT.PUT_LINE('Built query for: ' || rec.config_name || ' Table : '||l_target_tbl_name);
-       -- Step 1: Rebuild all queries BEFORE submitting jobs
-/*BEGIN
-  xx_boss_simple_query_pkg.rebuild_all_queries(p_instance_code);   
- -- DBMS_OUTPUT.PUT_LINE('✓ All queries rebuilt successfully');
-END;*/
+        l_query := xx_boss_query_builder_pkg.build_advanced_query(rec.config_name);
+        l_target_tbl_name := rec.target_table_name;
+        DBMS_OUTPUT.PUT_LINE('Built query for: ' || rec.config_name || ' Table : ' || l_target_tbl_name);
       EXCEPTION
         WHEN OTHERS THEN
           DBMS_OUTPUT.PUT_LINE('ERROR building query for ' || rec.config_name || ': ' || SQLERRM);
       END;
     END LOOP;
-    
-    DBMS_OUTPUT.PUT_LINE('========================================');
-    DBMS_OUTPUT.PUT_LINE('BOSS Extract Parallel Execution');
-    DBMS_OUTPUT.PUT_LINE('Batch ID: ' || l_batch_id);
-    DBMS_OUTPUT.PUT_LINE('Instance: ' || p_instance_code);
-    DBMS_OUTPUT.PUT_LINE('Effective Date: ' || l_effective_date);
+
     DBMS_OUTPUT.PUT_LINE('========================================');
     -- Create log entries for tracking
     FOR rec IN c_configs LOOP
@@ -236,7 +225,7 @@ l_error_msg := SQLERRM;
     DBMS_OUTPUT.PUT_LINE('Running       : ' || l_running_jobs);
     DBMS_OUTPUT.PUT_LINE('Queued        : ' || l_queued_jobs);
     DBMS_OUTPUT.PUT_LINE('Errors        : ' || l_error_jobs);
-    DBMS_OUTPUT.PUT_LINE('Progress      : ' || ROUND((l_completed_jobs/l_total_jobs)*100, 1) || '%');
+    DBMS_OUTPUT.PUT_LINE('Progress      : ' || CASE WHEN l_total_jobs > 0 THEN ROUND((l_completed_jobs/l_total_jobs)*100, 1) || '%' ELSE 'N/A' END);
     DBMS_OUTPUT.PUT_LINE('========================================');
 
     -- Show individual job details

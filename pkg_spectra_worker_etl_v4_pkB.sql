@@ -10,9 +10,11 @@
   ----------------------------------------------------------------
   -- Global variables
   ----------------------------------------------------------------
-  g_run_id NUMBER;
+  g_run_id      NUMBER;
+  g_request_id  VARCHAR2(200);   -- HCM job request ID, set as soon as known
+  g_view_name   VARCHAR2(200);   -- BOSS business view name (boss.view.name), from config
   g_oauth_token VARCHAR2(4000);
-  g_config_rec xx_int_saas_extract_config%ROWTYPE;
+  g_config_rec  xx_int_saas_extract_config%ROWTYPE;
 
   ----------------------------------------------------------------
   -- Logging
@@ -35,8 +37,9 @@
       l_text := l_text || ' | CLOB=' || DBMS_LOB.SUBSTR(p_clob, 500, 1);
     END IF;
 
-    INSERT INTO spectra_worker_etl_log (status, message)
-    VALUES ('log', l_text);
+    -- Stamp run_id and request_id so every detail row is filterable
+    INSERT INTO spectra_worker_etl_log (run_id, request_id, status, message)
+    VALUES (g_run_id, g_request_id, 'log', l_text);
 
     COMMIT;
   EXCEPTION
@@ -126,7 +129,14 @@
     INTO l_token
     FROM JSON_TABLE(l_json, '$' COLUMNS (access_token VARCHAR2(4000) PATH '$.access_token')) jt;
 
+    DBMS_LOB.freetemporary(l_json);
     RETURN 'Bearer ' || l_token;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF DBMS_LOB.istemporary(l_json) = 1 THEN
+        DBMS_LOB.freetemporary(l_json);
+      END IF;
+      RAISE;
   END get_oauth_token;
 
   ----------------------------------------------------------------
@@ -139,7 +149,8 @@
     p_version         IN VARCHAR2,
     p_format          IN VARCHAR2,
     p_advanced_query  IN CLOB,
-    p_effective_date  IN VARCHAR2
+    p_effective_date  IN VARCHAR2,
+    p_view_name       IN VARCHAR2 DEFAULT NULL  -- boss.view.name, omitted when NULL
   ) RETURN VARCHAR2 IS
     l_req       UTL_HTTP.req;
     l_resp      UTL_HTTP.resp;
@@ -156,7 +167,9 @@
     -- Replace {{EFFECTIVE_DATE}} placeholder in advanced query
     l_adv_query_final := REPLACE(p_advanced_query, '{{EFFECTIVE_DATE}}', NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')));
 
-    -- Build payload
+    -- Build payload; boss.view.name is included only when p_view_name is not NULL
+   if  p_view_name  not like 'phoneExtract%'  then
+
     SELECT JSON_OBJECT(
              'jobDefinitionName' VALUE 'AsyncDataExtraction',
              'serviceName' VALUE 'boss',
@@ -172,6 +185,27 @@
            )
     INTO l_payload
     FROM dual;
+    end if;
+    if  p_view_name  like 'phoneExtract%'  then
+SELECT JSON_OBJECT(
+             'jobDefinitionName' VALUE 'AsyncDataExtraction',
+             'serviceName' VALUE 'boss',
+             'requestParameters' VALUE JSON_OBJECT(
+               'boss.module' VALUE p_module_name,
+               'boss.resource.name' VALUE p_resource_name,
+             
+                 'boss.businessView' value 'workerPhonesExtract',
+
+               'boss.resource.version' VALUE p_version,
+               'boss.outputFormat' VALUE p_format,
+               'boss.request.system.param.effectiveDate' VALUE NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')),
+               'boss.advancedQuery' VALUE ('' || l_adv_query_final)
+             )
+             RETURNING CLOB
+           )
+    INTO l_payload
+    FROM dual;
+    end if;
 
     insert_log_detail(g_run_id, 'PAYLOAD_SENT', l_payload);
 
@@ -238,6 +272,10 @@
     LOOP
       log_etl('POLL_STATUS_BEGIN', 'requestId=' || p_request_id);
 
+      -- Free previous iteration's LOB before creating a new one
+      IF DBMS_LOB.istemporary(l_json) = 1 THEN
+        DBMS_LOB.freetemporary(l_json);
+      END IF;
       DBMS_LOB.createtemporary(l_json, TRUE);
 
       l_req := UTL_HTTP.begin_request(l_url, 'GET', 'HTTP/1.1');
@@ -289,10 +327,6 @@
       IF l_elapsed > p_timeout THEN
         RAISE_APPLICATION_ERROR(-20002, 'Poll timeout waiting for extract completion');
       END IF;
-
-      IF DBMS_LOB.istemporary(l_json) = 1 THEN
-        DBMS_LOB.freetemporary(l_json);
-      END IF;
     END LOOP;
   END poll_extract_status;
 
@@ -310,7 +344,8 @@
     p_target_table       IN VARCHAR2,
     p_advanced_query     IN CLOB,
     p_json_array_path    IN VARCHAR2 DEFAULT 'items',
-    p_truncate           IN BOOLEAN DEFAULT TRUE
+    p_truncate           IN BOOLEAN DEFAULT TRUE,
+     p_view_name          IN VARCHAR2 
   ) IS
     l_run_id      NUMBER;
     l_status      VARCHAR2(30);
@@ -326,7 +361,8 @@
     INSERT INTO spectra_worker_etl_log (status, message)
     VALUES ('STARTED', 'ETL run initiated (direct parameters)')
     RETURNING run_id INTO l_run_id;
-    g_run_id := l_run_id;
+    g_run_id     := l_run_id;
+    g_request_id := NULL;  -- reset so stale value from previous run is never logged
 
     log_etl('START', 'Direct execution started');
 
@@ -344,14 +380,16 @@
 
     -- Submit extract job
     l_request_id := submit_extract_job(
-      p_api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
-      p_module_name,
-      p_resource_name,
-      'v1',  -- default version
-      'json', -- default format
-      p_advanced_query,
-      l_effective_date
+      p_job_request_url => p_api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
+      p_module_name     => p_module_name,
+      p_resource_name   => p_resource_name,
+      p_version         => 'v1',
+      p_format          => 'json',
+      p_advanced_query  => p_advanced_query,
+      p_effective_date  => l_effective_date,
+      p_view_name       => g_view_name
     );
+    g_request_id := l_request_id;  -- expose to log_etl for all subsequent rows
 
     log_etl('SUBMIT', 'Job submitted: ' || l_request_id);
 
@@ -449,12 +487,11 @@ BEGIN
     l_http_code varchar2(100);
     l_buffer VARCHAR2(32767);
     l_json CLOB;
-      c_extract_file_base_url CONSTANT VARCHAR2(4000) :=
-        'https://fa-espx-dev1-saasfaprod1.fa.ocs.oraclecloud.com/api/saas-batch/jobfilemanager/v1/jobRequests/{{jobRequestId}}/outputFiles';
 
   BEGIN
-    l_url := REPLACE(c_extract_file_base_url, 
-                     '{{jobRequestId}}', p_file_id);
+    -- Use api_base_url from config to support all instances (DEV/STAGE/PROD)
+    l_url := g_config_rec.api_base_url ||
+             '/api/saas-batch/jobfilemanager/v1/jobRequests/' || p_file_id || '/outputFiles';
 
     log_etl('HTTP_PRE', 'Calling URL=' || l_url);
 
@@ -480,11 +517,11 @@ BEGIN
       WHEN UTL_HTTP.END_OF_BODY THEN
         NULL;
     END;
-        l_http_code := l_resp.status_code;
-    log_etl('got l_http_code', l_http_code);
-
-    log_etl('got download file name response', DBMS_LOB.SUBSTR(l_json, 3900, 1));
+    -- Read status_code BEFORE end_response (handle becomes invalid after)
+    l_http_code := l_resp.status_code;
     UTL_HTTP.end_response(l_resp);
+    log_etl('got l_http_code', l_http_code);
+    log_etl('got download file name response', DBMS_LOB.SUBSTR(l_json, 3900, 1));
 
     RETURN l_json;
   END download_extract_output;
@@ -686,11 +723,12 @@ BEGIN
   -- This procedure processes ALL downloaded files for a request
   ----------------------------------------------------------------
   PROCEDURE unzip_and_load_multi_files(
-    p_run_id IN NUMBER,
-    p_request_id IN VARCHAR2,
-    p_table_name IN VARCHAR2,
+    p_run_id          IN NUMBER,
+    p_request_id      IN VARCHAR2,
+    p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate_first IN BOOLEAN DEFAULT TRUE
+    p_truncate_first  IN BOOLEAN DEFAULT TRUE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL
   ) IS
     l_zip_blob BLOB;
     l_file_name VARCHAR2(200);
@@ -717,13 +755,14 @@ BEGIN
         -- Call the existing unzip procedure for each file
         -- Assuming the existing procedure handles a single zip file
         unzip_and_load_single_file(
-          p_run_id => p_run_id,
-          p_request_id => p_request_id,
-          p_file_name => rec.file_name,
-          p_file_blob => rec.file_blob,
-          p_table_name => p_table_name,
+          p_run_id          => p_run_id,
+          p_request_id      => p_request_id,
+          p_file_name       => rec.file_name,
+          p_file_blob       => rec.file_blob,
+          p_table_name      => p_table_name,
           p_json_array_path => p_json_array_path,
-          p_truncate => (l_files_processed = 1 AND p_truncate_first)  -- Only truncate for first file
+          p_truncate        => (l_files_processed = 1 AND p_truncate_first AND p_merge_key IS NULL),
+          p_merge_key       => p_merge_key
         );
 
         log_etl('UNZIP_COMPLETE_' || l_files_processed, 
@@ -760,13 +799,14 @@ BEGIN
   -- (This wraps the existing unzip_and_load_worker_assignments logic)
   ----------------------------------------------------------------
   PROCEDURE unzip_and_load_single_file(
-    p_run_id IN NUMBER,
-    p_request_id IN VARCHAR2,
-    p_file_name IN VARCHAR2,
-    p_file_blob IN BLOB,
-    p_table_name IN VARCHAR2,
+    p_run_id          IN NUMBER,
+    p_request_id      IN VARCHAR2,
+    p_file_name       IN VARCHAR2,
+    p_file_blob       IN BLOB,
+    p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate IN BOOLEAN DEFAULT FALSE
+    p_truncate        IN BOOLEAN DEFAULT FALSE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL
   ) IS
     -- Declare variables needed for unzipping
     l_files apex_zip.t_files;
@@ -822,12 +862,13 @@ BEGIN
 
       -- Load to table (using existing load procedure)
       load_json_to_table(
-        p_run_id => p_run_id,
-        p_request_id => p_request_id,
-        p_json => l_json_content,
-        p_table_name => p_table_name,
+        p_run_id          => p_run_id,
+        p_request_id      => p_request_id,
+        p_json            => l_json_content,
+        p_table_name      => p_table_name,
         p_json_array_path => p_json_array_path,
-        p_truncate => p_truncate
+        p_truncate        => p_truncate,
+        p_merge_key       => p_merge_key
       );
 
       log_etl('LOADED_FROM_ZIP', 'Loaded data from: ' || l_files(i));
@@ -909,12 +950,13 @@ BEGIN
       log_etl('JSON_LEN', TO_CHAR(DBMS_LOB.getlength(l_json_clob)));
 
       load_json_to_table(
-        p_run_id => p_run_id,
-        p_request_id => p_request_id,
-        p_json => l_json_clob,
-        p_table_name => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
+        p_run_id          => p_run_id,
+        p_request_id      => p_request_id,
+        p_json            => l_json_clob,
+        p_table_name      => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
         p_json_array_path => NVL(g_config_rec.json_array_path, 'items'),
-        p_truncate => (NVL(g_config_rec.truncate_before_load, 'Y') = 'Y' AND i = 1)
+        p_truncate        => (NVL(g_config_rec.truncate_before_load, 'Y') = 'Y' AND i = 1),
+        p_merge_key       => g_config_rec.merge_key_columns
       );
 
       log_etl('LOADED', 'Data loaded from: ' || l_src_file);
@@ -932,12 +974,13 @@ BEGIN
   -- Load JSON to Table (using original implementation with JSON_DATAGUIDE)
   ----------------------------------------------------------------
   PROCEDURE load_json_to_table(
-    p_run_id IN NUMBER,
-    p_request_id IN VARCHAR2,
-    p_json IN CLOB,
-    p_table_name IN VARCHAR2,
+    p_run_id          IN NUMBER,
+    p_request_id      IN VARCHAR2,
+    p_json            IN CLOB,
+    p_table_name      IN VARCHAR2,
     p_json_array_path IN VARCHAR2 DEFAULT 'items',
-    p_truncate IN BOOLEAN DEFAULT TRUE
+    p_truncate        IN BOOLEAN DEFAULT TRUE,
+    p_merge_key       IN VARCHAR2 DEFAULT NULL  -- Comma-separated key columns for MERGE (NULL = INSERT)
   ) IS
     l_dataguide CLOB;
     l_insert_sql CLOB;
@@ -1132,15 +1175,18 @@ BEGIN
       -- Ensure static columns exist even for existing table
       ensure_static_columns;
 
-      IF p_truncate THEN
+      IF p_truncate AND p_merge_key IS NULL THEN
         EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || p_table_name;
       END IF;
     END IF;
 
-    -- Insert data (include static columns + JSON columns)
+    -- Insert or merge data (static + JSON columns)
     DECLARE
-      l_col_list   CLOB := '';
+      l_col_list    CLOB := '';
       l_select_list CLOB := '';
+      l_on_clause   CLOB := '';
+      l_update_set  CLOB := '';
+      l_keys_upper  VARCHAR2(4000);
     BEGIN
       -- Column list
       l_col_list :=
@@ -1155,15 +1201,69 @@ BEGIN
         l_select_list := l_select_list || ', jt.' || l_columns(i).col_name;
       END LOOP;
 
-      l_insert_sql :=
-        'INSERT INTO ' || p_table_name || ' (' || l_col_list || ')' ||
-        ' SELECT ' || l_select_list ||
-        ' FROM JSON_TABLE(:1, ''$.' || p_json_array_path || '[*]'' COLUMNS (' ||
-        l_json_cols || ')) jt';
+      IF p_merge_key IS NOT NULL THEN
+        -- MERGE path: build ON clause + UPDATE SET from the key column list
+        l_keys_upper := ',' || UPPER(REPLACE(p_merge_key, ' ', '')) || ',';
+
+        -- ON clause: t.KEY1 = s.KEY1 AND t.KEY2 = s.KEY2 ...
+        DECLARE
+          l_rest  VARCHAR2(4000) := UPPER(REPLACE(p_merge_key, ' ', '')) || ',';
+          l_pos   PLS_INTEGER := 1;
+          l_comma PLS_INTEGER;
+          l_key   VARCHAR2(128);
+          l_first BOOLEAN := TRUE;
+        BEGIN
+          LOOP
+            l_comma := INSTR(l_rest, ',', l_pos);
+            EXIT WHEN l_comma = 0;
+            l_key := TRIM(SUBSTR(l_rest, l_pos, l_comma - l_pos));
+            IF l_key IS NOT NULL THEN
+              IF NOT l_first THEN l_on_clause := l_on_clause || ' AND '; END IF;
+              l_on_clause := l_on_clause || 't.' || l_key || ' = s.' || l_key;
+              l_first := FALSE;
+            END IF;
+            l_pos := l_comma + 1;
+          END LOOP;
+        END;
+
+        -- UPDATE SET: tracking cols + every non-key JSON column
+        l_update_set :=
+          't.RUN_ID = s.RUN_ID, t.REQUEST_ID = s.REQUEST_ID, t.LAST_UPDATE_DATE = s.LAST_UPDATE_DATE';
+        FOR i IN 1 .. l_columns.COUNT LOOP
+          IF INSTR(l_keys_upper, ',' || l_columns(i).col_name || ',') = 0 THEN
+            l_update_set := l_update_set ||
+              ', t.' || l_columns(i).col_name || ' = s.' || l_columns(i).col_name;
+          END IF;
+        END LOOP;
+
+        -- Assemble MERGE statement
+        l_insert_sql :=
+          'MERGE INTO ' || p_table_name || ' t' ||
+          ' USING (SELECT ' || l_select_list ||
+          ' FROM JSON_TABLE(:1, ''$.' || p_json_array_path || '[*]'' COLUMNS (' ||
+          l_json_cols || ')) jt) s' ||
+          ' ON (' || l_on_clause || ')' ||
+          ' WHEN MATCHED THEN UPDATE SET ' || l_update_set ||
+          ' WHEN NOT MATCHED THEN INSERT (' || l_col_list || ')' ||
+          ' VALUES (s.RUN_ID, s.REQUEST_ID, s.CREATION_DATE, s.LAST_UPDATE_DATE';
+        FOR i IN 1 .. l_columns.COUNT LOOP
+          l_insert_sql := l_insert_sql || ', s.' || l_columns(i).col_name;
+        END LOOP;
+        l_insert_sql := l_insert_sql || ')';
+
+      ELSE
+        -- INSERT path (original behaviour)
+        l_insert_sql :=
+          'INSERT INTO ' || p_table_name || ' (' || l_col_list || ')' ||
+          ' SELECT ' || l_select_list ||
+          ' FROM JSON_TABLE(:1, ''$.' || p_json_array_path || '[*]'' COLUMNS (' ||
+          l_json_cols || ')) jt';
+      END IF;
     END;
 
-    log_etl('INSERT_JSON_TO_TABLE', l_insert_sql);
-EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
+    log_etl('INSERT_OR_MERGE_JSON_TO_TABLE', l_insert_sql);
+    -- Bind order matches placeholders: :1=JSON (JSON_TABLE source), :2=RUN_ID, :3=REQUEST_ID
+    EXECUTE IMMEDIATE l_insert_sql USING p_json, p_run_id, p_request_id;
     COMMIT;
   END load_json_to_table;
 
@@ -1198,13 +1298,17 @@ EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
     FROM xx_int_saas_extract_config
     WHERE config_name = p_config_name AND active_flag = 'Y';
 
+    g_view_name := g_config_rec.view_name;  -- NULL when not configured = no view filter
+
     -- Start log
     INSERT INTO spectra_worker_etl_log (status, message)
     VALUES ('STARTED', 'ETL run initiated for config: ' || p_config_name)
     RETURNING run_id INTO l_run_id;
-    g_run_id := l_run_id;
+    g_run_id     := l_run_id;
+    g_request_id := NULL;  -- reset so stale value from previous run is never logged
 
     log_etl('CONFIG', 'Using configuration: ' || p_config_name);
+    log_etl('VIEW_NAME', CASE WHEN g_view_name IS NOT NULL THEN 'boss.view.name = ' || g_view_name ELSE 'No view filter (boss.view.name omitted)' END);
     log_etl('MULTI_FILE_MODE', 'Multi-file processing: ' || CASE WHEN p_multi_file THEN 'ENABLED' ELSE 'DISABLED' END);
 
     -- Get OAuth token
@@ -1219,14 +1323,16 @@ EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
 
     -- Submit extract job
     l_request_id := submit_extract_job(
-      g_config_rec.api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
-      g_config_rec.module_name,
-      g_config_rec.resource_name,
-      g_config_rec.resource_version,
-      g_config_rec.output_format,
-      g_config_rec.advanced_query_template,
-      NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD'))
+      p_job_request_url => g_config_rec.api_base_url || '/api/saas-batch/jobscheduler/v1/jobRequests',
+      p_module_name     => g_config_rec.module_name,
+      p_resource_name   => g_config_rec.resource_name,
+      p_version         => g_config_rec.resource_version,
+      p_format          => g_config_rec.output_format,
+      p_advanced_query  => g_config_rec.advanced_query_template,
+      p_effective_date  => NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')),
+      p_view_name       => g_view_name  -- NULL when not configured, omitted from payload
     );
+    g_request_id := l_request_id;  -- expose to log_etl for all subsequent rows
 
     log_etl('SUBMIT', 'Job submitted: ' || l_request_id);
 
@@ -1276,8 +1382,9 @@ EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
 
       log_etl('MULTI_FILE_DOWNLOADED', 'Downloaded ' || l_files_downloaded || ' file(s)');
 
-      -- Truncate target table before loading (only once for all files)
-      IF g_config_rec.target_table_name IS NOT NULL THEN
+      -- Truncate target table before loading (only when not in merge mode)
+      IF g_config_rec.target_table_name IS NOT NULL
+         AND g_config_rec.merge_key_columns IS NULL THEN
         BEGIN
           EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || g_config_rec.target_table_name;
           log_etl('TABLE_TRUNCATED', 'Target table truncated: ' || g_config_rec.target_table_name);
@@ -1291,11 +1398,12 @@ EXECUTE IMMEDIATE l_insert_sql USING p_run_id, p_request_id, p_json;
       log_etl('MULTI_FILE_LOAD', 'Starting multi-file load');
 
       unzip_and_load_multi_files(
-        p_run_id => g_run_id,
-        p_request_id => l_request_id,
-        p_table_name => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
+        p_run_id          => g_run_id,
+        p_request_id      => l_request_id,
+        p_table_name      => NVL(g_config_rec.target_table_name, 'XX_INT_WORKER_ASSIGNMENT_STG'),
         p_json_array_path => NVL(g_config_rec.json_array_path, 'items'),
-        p_truncate_first => FALSE  -- Already truncated above
+        p_truncate_first  => FALSE,  -- Already truncated above (only when not merging)
+        p_merge_key       => g_config_rec.merge_key_columns
       );
 
       log_etl('MULTI_FILE_COMPLETE', 'All files processed successfully');
@@ -1423,7 +1531,7 @@ BEGIN
     -- p_token_url, p_client_id, p_client_secret, p_scope
     -- now sourced from APEX credential — config table values ignored
     l_idcs_resp := APEX_WEB_SERVICE.MAKE_REST_REQUEST(
-                       p_url                  => c_post_body,
+                       p_url                  => p_token_url,
                        p_http_method          => 'POST',
                        p_body                 => c_post_body,
                        p_credential_static_id => c_cred_id
