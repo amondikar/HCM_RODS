@@ -168,6 +168,8 @@
     l_adv_query_final := REPLACE(p_advanced_query, '{{EFFECTIVE_DATE}}', NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')));
 
     -- Build payload; boss.view.name is included only when p_view_name is not NULL
+   if  p_view_name  not like 'phoneExtract%'  then
+
     SELECT JSON_OBJECT(
              'jobDefinitionName' VALUE 'AsyncDataExtraction',
              'serviceName' VALUE 'boss',
@@ -177,13 +179,33 @@
                'boss.resource.version' VALUE p_version,
                'boss.outputFormat' VALUE p_format,
                'boss.request.system.param.effectiveDate' VALUE NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')),
-               'boss.view.name' VALUE p_view_name ABSENT ON NULL,
                'boss.advancedQuery' VALUE ('' || l_adv_query_final)
              )
              RETURNING CLOB
            )
     INTO l_payload
     FROM dual;
+    end if;
+    if  p_view_name  like 'phoneExtract%'  then
+SELECT JSON_OBJECT(
+             'jobDefinitionName' VALUE 'AsyncDataExtraction',
+             'serviceName' VALUE 'boss',
+             'requestParameters' VALUE JSON_OBJECT(
+               'boss.module' VALUE p_module_name,
+               'boss.resource.name' VALUE p_resource_name,
+             
+                 'boss.businessView' value 'workerPhonesExtract',
+
+               'boss.resource.version' VALUE p_version,
+               'boss.outputFormat' VALUE p_format,
+               'boss.request.system.param.effectiveDate' VALUE NVL(p_effective_date, TO_CHAR(SYSDATE, 'YYYY-MM-DD')),
+               'boss.advancedQuery' VALUE ('' || l_adv_query_final)
+             )
+             RETURNING CLOB
+           )
+    INTO l_payload
+    FROM dual;
+    end if;
 
     insert_log_detail(g_run_id, 'PAYLOAD_SENT', l_payload);
 
@@ -322,7 +344,8 @@
     p_target_table       IN VARCHAR2,
     p_advanced_query     IN CLOB,
     p_json_array_path    IN VARCHAR2 DEFAULT 'items',
-    p_truncate           IN BOOLEAN DEFAULT TRUE
+    p_truncate           IN BOOLEAN DEFAULT TRUE,
+     p_view_name          IN VARCHAR2 
   ) IS
     l_run_id      NUMBER;
     l_status      VARCHAR2(30);
