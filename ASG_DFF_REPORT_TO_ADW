@@ -1,0 +1,37 @@
+SET SERVEROUTput ON
+DECLARE
+  l_run_id         NUMBER;
+  l_detail_table   VARCHAR2(32767);
+  l_rows_inserted  NUMBER;
+BEGIN
+  XX_RODS_LOAD_ASG_EIT_EXTRACT_V3_PRC(
+    p_report_path         => '/Custom/Human Capital Management/CMI-Integrations/HCM Extracts/Reports/COMMON/PERSON_EIT_ADW.xdo',
+    p_report_name         => 'PERSON_EIT_ADW',
+    p_format              => 'text',
+    p_template            => 'PIPE2',
+      p_deliveryOptionId     => null,
+    p_payrollActionId       => 3709561,
+    p_flowInstanceName        => null,
+    p_sequence               => null,
+    p_isBursting        => null,
+     p_isChunking         => null,
+    p_locale              => 'en-US',
+    p_recreate_table_flag => 'Y',
+    p_run_id_out          => l_run_id,
+    p_detail_table_out    => l_detail_table,
+    p_rows_inserted_out   => l_rows_inserted
+  );
+
+  DBMS_OUTPUT.PUT_LINE('Run ID: ' || l_run_id);
+  DBMS_OUTPUT.PUT_LINE('Detail table: ' || l_detail_table);
+  DBMS_OUTPUT.PUT_LINE('Rows inserted: ' || l_rows_inserted);
+END;
+
+PL/SQL procedure successfully completed.
+
+Run ID: 137
+Detail table: XXREP_PERSON_EIT_ADW
+Rows inserted: 368
+
+Verify results in table
+select * FROM XXREP_PERSON_EIT_ADW
