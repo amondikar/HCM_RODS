@@ -1,0 +1,205 @@
+--------------------------------------------------------
+--  DDL for Function XXINT_RUN_EXTRACT_REPORT
+--------------------------------------------------------
+
+  CREATE OR REPLACE EDITIONABLE FUNCTION "XX_INT"."XXINT_RUN_EXTRACT_REPORT" (
+    p_report_path       IN VARCHAR2,
+    p_format            IN VARCHAR2,
+    p_template          IN VARCHAR2,
+    p_deliveryoptionid  IN NUMBER,
+    p_payrollactionid   IN NUMBER,
+    p_flowinstancename  IN VARCHAR2,
+    p_sequence          IN NUMBER,
+    p_isbursting        IN BOOLEAN,
+    p_ischunking        IN BOOLEAN,
+    p_locale            IN VARCHAR2 DEFAULT 'en-US'
+) RETURN BLOB
+AUTHID CURRENT_USER
+IS
+    c_bip_url      CONSTANT VARCHAR2(4000) :=
+        'https://fa-espx-dev1-saasfaprod1.fa.ocs.oraclecloud.com/xmlpserver/services/ExternalReportWSSService';
+    c_bip_user     CONSTANT VARCHAR2(200)  := 'XXRODS';
+    c_bip_password CONSTANT VARCHAR2(200)  := 'Welcome1234$';
+
+    l_req         UTL_HTTP.req;
+    l_resp        UTL_HTTP.resp;
+    l_buf         VARCHAR2(32767);
+    l_response    CLOB;
+    l_envelope    CLOB;
+
+    l_xml               XMLTYPE;
+    l_b64               CLOB;
+    l_report_blob       BLOB;
+    l_pos               PLS_INTEGER := 1;
+    l_chunk             VARCHAR2(32000);
+    l_raw               RAW(32767);
+    l_fault             VARCHAR2(4000);
+
+    FUNCTION basic_auth (p_user IN VARCHAR2, p_pwd IN VARCHAR2)
+        RETURN VARCHAR2
+    IS
+        l_raw_auth RAW(32767);
+    BEGIN
+        l_raw_auth := UTL_RAW.cast_to_raw(p_user || ':' || p_pwd);
+        RETURN 'Basic ' ||
+               UTL_RAW.cast_to_varchar2(UTL_ENCODE.base64_encode(l_raw_auth));
+    END basic_auth;
+
+    FUNCTION xml_escape (p_value IN VARCHAR2)
+        RETURN VARCHAR2
+    IS
+    BEGIN
+        IF p_value IS NULL THEN
+            RETURN NULL;
+        END IF;
+
+        RETURN DBMS_XMLGEN.CONVERT(p_value, DBMS_XMLGEN.ENTITY_ENCODE);
+    END xml_escape;
+
+    FUNCTION build_param_item (
+        p_name  IN VARCHAR2,
+        p_value IN VARCHAR2
+    ) RETURN CLOB
+    IS
+    BEGIN
+        IF p_value IS NULL THEN
+            RETURN '';
+        END IF;
+
+        RETURN '    <pub:item>'
+            || '      <pub:name>' || xml_escape(p_name) || '</pub:name>'
+            || '      <pub:values>'
+            || '        <pub:item>' || xml_escape(p_value) || '</pub:item>'
+            || '      </pub:values>'
+            || '    </pub:item>';
+    END build_param_item;
+
+BEGIN
+    l_envelope :=
+          '<?xml version="1.0" encoding="UTF-8"?>'
+       || '<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"'
+       || '                  xmlns:pub="http://xmlns.oracle.com/oxp/service/PublicReportService">'
+       || '  <soap12:Header/>'
+       || '  <soap12:Body>'
+       || '    <pub:runReport>'
+       || '      <pub:reportRequest>'
+       || '        <pub:attributeLocale>' || xml_escape(NVL(p_locale, 'en-US')) || '</pub:attributeLocale>'
+       || '        <pub:parameterNameValues>'
+       || build_param_item('deliveryOptionId', TO_CHAR(p_deliveryoptionid))
+       || build_param_item('payrollActionId', TO_CHAR(p_payrollactionid))
+       || build_param_item('flowInstanceName', p_flowinstancename)
+       || build_param_item('sequence', TO_CHAR(p_sequence))
+       || build_param_item('isBursting', CASE WHEN p_isbursting THEN 'true' ELSE 'false' END)
+       || build_param_item('isChunking', CASE WHEN p_ischunking THEN 'true' ELSE 'false' END)
+       || '        </pub:parameterNameValues>'
+       || CASE
+              WHEN p_template IS NOT NULL THEN
+                  '<pub:attributeTemplate>' || xml_escape(p_template) || '</pub:attributeTemplate>'
+              ELSE
+                  ''
+          END
+       || CASE
+              WHEN p_format IS NOT NULL THEN
+                  '<pub:attributeFormat>' || LOWER(TRIM(p_format)) || '</pub:attributeFormat>'
+              ELSE
+                  ''
+          END
+       || '        <pub:flattenXML>false</pub:flattenXML>'
+       || '        <pub:reportAbsolutePath>' || xml_escape(p_report_path) || '</pub:reportAbsolutePath>'
+       || '        <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>'
+       || '      </pub:reportRequest>'
+       || '      <pub:userID></pub:userID>'
+       || '      <pub:password></pub:password>'
+       || '    </pub:runReport>'
+       || '  </soap12:Body>'
+       || '</soap12:Envelope>';
+
+    UTL_HTTP.set_transfer_timeout(300);
+
+    l_req := UTL_HTTP.begin_request(
+                 url          => c_bip_url,
+                 method       => 'POST',
+                 http_version => 'HTTP/1.1');
+
+    UTL_HTTP.set_header(
+        l_req,
+        'Content-Type',
+        'application/soap+xml; charset=UTF-8; action="runReport"'
+    );
+
+    UTL_HTTP.set_header(
+        l_req,
+        'Content-Length',
+        TO_CHAR(DBMS_LOB.getlength(l_envelope))
+    );
+
+    UTL_HTTP.set_header(l_req, 'Authorization', basic_auth(c_bip_user, c_bip_password));
+    UTL_HTTP.write_text(l_req, l_envelope);
+
+    l_resp := UTL_HTTP.get_response(l_req);
+
+    BEGIN
+        LOOP
+            UTL_HTTP.read_text(l_resp, l_buf, 32767);
+            l_response := l_response || l_buf;
+        END LOOP;
+    EXCEPTION
+        WHEN UTL_HTTP.end_of_body THEN
+            NULL;
+    END;
+
+    UTL_HTTP.end_response(l_resp);
+
+    l_xml := XMLTYPE(l_response);
+
+    BEGIN
+        l_b64 := l_xml.extract('//*[local-name()="reportBytes"]/text()').getClobVal();
+    EXCEPTION
+        WHEN OTHERS THEN
+            l_b64 := NULL;
+    END;
+
+    IF l_b64 IS NULL THEN
+        BEGIN
+            l_fault :=
+                l_xml.extract(
+                    '//*[local-name()="Fault"]/*[local-name()="faultstring" or local-name()="Text"]/text()'
+                ).getStringVal();
+        EXCEPTION
+            WHEN OTHERS THEN
+                l_fault := NULL;
+        END;
+
+        IF l_fault IS NOT NULL THEN
+            RAISE_APPLICATION_ERROR(-20001, 'BIP runReport fault: ' || l_fault);
+        ELSE
+            RAISE_APPLICATION_ERROR(
+                -20001,
+                'runReport did not return reportBytes. First 1500 chars of SOAP response: '
+                || SUBSTR(l_response, 1, 1500)
+            );
+        END IF;
+    END IF;
+
+    DBMS_LOB.createtemporary(l_report_blob, TRUE);
+
+    WHILE l_pos <= DBMS_LOB.getlength(l_b64) LOOP
+        l_chunk := DBMS_LOB.SUBSTR(l_b64, 32000, l_pos);
+        l_raw   := UTL_ENCODE.base64_decode(UTL_RAW.cast_to_raw(l_chunk));
+        DBMS_LOB.writeappend(l_report_blob, UTL_RAW.LENGTH(l_raw), l_raw);
+        l_pos   := l_pos + 32000;
+    END LOOP;
+
+    RETURN l_report_blob;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        BEGIN
+            UTL_HTTP.end_response(l_resp);
+        EXCEPTION
+            WHEN OTHERS THEN NULL;
+        END;
+        RAISE;
+END xxint_run_extract_report;
+
+/
